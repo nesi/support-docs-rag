@@ -13,10 +13,13 @@ A retrieval-augmented assistant for [docs.nesi.org.nz](https://docs.nesi.org.nz)
                      │              4. grounded answer       @cf/meta/llama-3.3-70b    │
                      └─────────────────────────────────────────────────────────────────┘
                                         ▲
-        nesi/support-docs (GitHub) ─────┘  scripts/ingest.mjs (chunk → embed → upsert)
+     docs.nesi.org.nz (rendered) ───────┘  scripts/ingest.mjs (fetch → chunk → embed → upsert)
+     nesi/support-docs (frontmatter only, local clone)
 ```
 
 **Why this is more than a search engine.** Stage 2 (vector search) finds chunks that are *semantically near* the question — it matches "why is my job stuck" to a page about queue priority even with zero shared keywords. Stage 3 is a cross-encoder reranker that reads question + chunk together and scores true relevance, filtering the near-misses. Stage 4 hands only those vetted excerpts to the LLM under a strict system prompt: answer only from excerpts, cite every claim, refuse when confidence is low.
+
+**Ingest sources page bodies from the rendered site, not raw markdown.** Several pages (all ~50 `Software/Available_Applications/*` pages, plus a shared "contact support" link used on ~80 pages) build real content from mkdocs-macros Jinja includes that only resolve at site-build time — the module version table, the mailto link. The raw `.md` never has that content; regex-stripping the Jinja tag just deletes it. `scripts/renderedPage.mjs` fetches the live page, strips the theme chrome (nav, edit-page button, JS-only placeholder widgets), flattens the site's own tables/admonitions/tabs, and runs the rest through `turndown` back to markdown. Frontmatter (`description`, `tags`) still comes from the local `.md` clone — the rendered page doesn't expose those reliably. If a page's rendered fetch fails, 404s, or extracts suspiciously short, that one page falls back to the raw-markdown path — logged by `ingest.mjs`, never silent.
 
 **Chunking** (`scripts/chunker.mjs`) splits each page on headings, merges tiny sections, splits huge ones (~450 tokens target), and prepends a breadcrumb ("Batch Computing > Slurm > Job priority") plus the page's frontmatter description and tags to the embedded text — so chunks carry their context into the vector space.
 
@@ -40,6 +43,7 @@ wrangler deploy
 #    dash.cloudflare.com -> My Profile -> API Tokens -> Create Custom Token,
 #    scoped to this account only. Account ID is on the Workers overview page.
 git clone https://github.com/nesi/support-docs
+npm install                        # cheerio + turndown — ingest tooling only, the Worker itself has no deps
 export CLOUDFLARE_ACCOUNT_ID=...
 export CLOUDFLARE_API_TOKEN=...
 node scripts/ingest.mjs support-docs/docs
@@ -47,7 +51,9 @@ node scripts/ingest.mjs support-docs/docs
 # 4. Open the URL wrangler printed — ask "How do I submit a Slurm job?"
 ```
 
-Cost at internal-team scale: Workers free tier covers the requests; ingest of ~685 chunks is well within Workers AI's free daily allocation; per query you pay fractions of a cent for the 70B model tokens. Expect single-digit dollars per month.
+Ingest fetches every page from docs.nesi.org.nz (politely — capped concurrency, real User-Agent), so it takes longer than a local-only chunker would and needs the live site to be reachable. Preview what it will do without spending anything: `node scripts/ingest.mjs support-docs/docs --dry-run`.
+
+Cost at internal-team scale: Workers free tier covers the requests; ingest of ~865 chunks is well within Workers AI's free daily allocation; per query you pay fractions of a cent for the 70B model tokens. Expect single-digit dollars per month.
 
 ## Locking it down (internal team)
 
@@ -94,4 +100,4 @@ The metric that matters most is `grounded`: confident *and* holding a relevant c
 
 ## Files
 
-`src/worker.js` — router, retrieval pipeline, chat SSE endpoint, MCP server (no dependencies). `public/index.html` — chat UI (vanilla JS, streaming, citations). `scripts/chunker.mjs` — markdown-aware chunker. `scripts/ingest.mjs` — embed + upsert to Vectorize. `scripts/eval.mjs` — retrieval + refusal eval. `scripts/eval.test.mjs` — tests the eval's scoring. `evals/questions.jsonl` — the eval cases.
+`src/worker.js` — router, retrieval pipeline, chat SSE endpoint, MCP server (no dependencies). `public/index.html` — chat UI (vanilla JS, streaming, citations). `scripts/chunker.mjs` — markdown-aware chunker (frontmatter + splitting logic; body text can come from either source below). `scripts/renderedPage.mjs` — fetches and converts a rendered docs.nesi.org.nz page back to markdown. `scripts/ingest.mjs` — fetch (with raw-markdown fallback) → chunk → embed → upsert. `scripts/eval.mjs` — retrieval + refusal eval. `scripts/eval.test.mjs` — tests the eval's scoring. `evals/questions.jsonl` — the eval cases. `package.json` — `cheerio`/`turndown`, ingest tooling only.

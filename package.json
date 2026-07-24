@@ -1,0 +1,10 @@
+{
+  "name": "nesi-docs-rag-scripts",
+  "private": true,
+  "type": "module",
+  "description": "Offline ingest tooling only — the deployed Worker (src/worker.js) has zero npm dependencies.",
+  "devDependencies": {
+    "cheerio": "^1.0.0",
+    "turndown": "^7.2.0"
+  }
+}

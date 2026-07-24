@@ -7,9 +7,18 @@
  * the user's question and ask Vectorize for the nearest vectors (cosine
  * similarity). Cheap, fast, and the index only changes when the docs do.
  *
+ * The body of each page is sourced from the *rendered* docs.nesi.org.nz page,
+ * not the raw .md — several pages build real content (module version tables,
+ * a support-contact link) from mkdocs-macros Jinja includes that only
+ * resolve at site-build time, and the raw markdown source never has that
+ * content. Frontmatter (description, tags) still comes from the raw .md.
+ * If a page's rendered fetch fails or its extracted body is implausibly
+ * short, that one page falls back to the raw-markdown path (chunkFile) —
+ * logged, never silent.
+ *
  * Usage:
  *   export CLOUDFLARE_ACCOUNT_ID=...   # dash.cloudflare.com -> Workers -> right sidebar
- *   export CLOUDFLARE_API_TOKEN=...    # token with Workers AI:Read + Vectorize:Edit
+ *   export CLOUDFLARE_API_TOKEN=...    # token with Workers AI Read + Edit, Vectorize Edit
  *   node scripts/ingest.mjs /path/to/support-docs/docs [--index nesi-docs] [--dry-run]
  *
  * Re-running is safe: vector ids are stable (see chunkId()), so upserts
@@ -18,7 +27,96 @@
  *   npx wrangler vectorize create nesi-docs --dimensions=1024 --metric=cosine
  */
 
-import { chunkRepo } from "./chunker.mjs";
+import { relative } from "node:path";
+import { chunkBody, chunkFile, DEFAULT_SITE_URL, pathToUrl, readFrontmatter, walkMarkdown } from "./chunker.mjs";
+import { extractBody } from "./renderedPage.mjs";
+
+const SITE_URL = DEFAULT_SITE_URL;
+const FETCH_CONCURRENCY = 6; // polite to the live site — this isn't Cloudflare's API
+const FETCH_TIMEOUT_MS = 15000;
+const MIN_RENDERED_BODY_CHARS = 80; // matches chunkBody's own stub-page threshold
+
+/** Run with a small concurrency cap — 306 sequential fetches would be slow, 306 at once rude. */
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        out[i] = await fn(items[i], i);
+      }
+    })
+  );
+  return out;
+}
+
+/**
+ * When a raw filename's casing doesn't match the site's canonical slug (e.g.
+ * "Globus-renaming.md" -> "/Globus-Renaming/"), the old URL still resolves —
+ * as a client-side redirect stub (real 200, near-empty HTML, no content
+ * container). Real pages always self-reference their own canonical URL, so
+ * following it whenever it points elsewhere is a generic fix, not a guess at
+ * a redirect-page template.
+ */
+function extractCanonical(html, baseUrl) {
+  const m = html.match(/<link\s+rel="canonical"\s+href="([^"]+)"/i);
+  if (!m) return null;
+  try {
+    return new URL(m[1], baseUrl).href;
+  } catch {
+    return null;
+  }
+}
+
+/** null return = confirmed 404 (page doesn't exist there — no point retrying). Throws on anything else after one retry. */
+async function fetchRenderedPage(url, depth = 0) {
+  for (let attempt = 0; ; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: { "User-Agent": "nesi-docs-rag-ingest/1.0 (internal tooling)" },
+      });
+      if (res.ok) {
+        const html = await res.text();
+        if (depth < 2) {
+          const canonical = extractCanonical(html, url);
+          if (canonical && canonical !== url) return fetchRenderedPage(canonical, depth + 1);
+        }
+        return html;
+      }
+      if (res.status === 404) return null;
+      if (attempt >= 1) throw new Error(`${url} -> ${res.status}`);
+    } catch (e) {
+      if (attempt >= 1) throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/** Rendered HTML when it's usable, else the local raw-markdown path — always tagged with which one and why. */
+async function gatherChunksForFile(absPath, docsRoot) {
+  const relPath = relative(docsRoot, absPath);
+  const meta = readFrontmatter(absPath);
+  const url = pathToUrl(relPath, SITE_URL);
+  let reason;
+  try {
+    const html = await fetchRenderedPage(url);
+    if (html === null) {
+      reason = "404 on rendered site";
+    } else {
+      const body = extractBody(html);
+      if (body.length >= MIN_RENDERED_BODY_CHARS) return { path: relPath, source: "html", chunks: chunkBody(relPath, meta, body, SITE_URL) };
+      reason = "rendered content too short (theme change, or content container not found)";
+    }
+  } catch (e) {
+    reason = e.message;
+  }
+  return { path: relPath, source: "fallback", reason, chunks: chunkFile(absPath, docsRoot, SITE_URL) };
+}
 
 const ACCOUNT = process.env.CLOUDFLARE_ACCOUNT_ID;
 const TOKEN = process.env.CLOUDFLARE_API_TOKEN;
@@ -132,8 +230,30 @@ function makeBatches(chunks) {
   return batches;
 }
 
-const chunks = chunkRepo(docsRoot);
+const files = [...walkMarkdown(docsRoot)];
+console.log(`Found ${files.length} markdown files. Fetching rendered pages from ${SITE_URL} ...`);
+let fetchedCount = 0;
+const results = await mapLimit(files, FETCH_CONCURRENCY, async (absPath) => {
+  const r = await gatherChunksForFile(absPath, docsRoot);
+  fetchedCount++;
+  process.stdout.write(`\rFetched ${fetchedCount}/${files.length}`);
+  return r;
+});
+process.stdout.write("\n");
+
+const chunks = results.flatMap((r) => r.chunks);
 console.log(`Chunked ${new Set(chunks.map((c) => c.metadata.path)).size} files into ${chunks.length} chunks.`);
+
+const fallbacks = results.filter((r) => r.source === "fallback");
+if (fallbacks.length) {
+  console.log(`${fallbacks.length}/${files.length} page(s) used the local-markdown fallback (rendered page unavailable or too thin):`);
+  const byReason = new Map();
+  for (const f of fallbacks) byReason.set(f.reason, [...(byReason.get(f.reason) || []), f.path]);
+  for (const [reason, paths] of byReason) {
+    console.log(`  ${paths.length}x ${reason}: ${paths.slice(0, 3).join(", ")}${paths.length > 3 ? `, ... (${paths.length - 3} more)` : ""}`);
+  }
+}
+
 if (DRY) { console.log("Dry run — not embedding/upserting."); process.exit(0); }
 
 const batches = makeBatches(chunks);

@@ -27,7 +27,7 @@ const OVERLAP_CHARS = 250;   // overlap when force-splitting long sections
 
 const SKIP_DIRS = new Set(["assets"]);
 const SKIP_FILES = new Set([
-  "CONTRIBUTING.md", "FORMAT.md", "NEWPAGE.md", "MACROS.md", "tags.md", "updates.md",
+  "CONTRIBUTING.md", "FORMAT.md", "NEWPAGE.md", "MACROS.md", "tags.md", "updates.md", "mermaid-test.md",
 ]);
 
 export function* walkMarkdown(root) {
@@ -106,7 +106,12 @@ export function chunkId(relPath, i) {
 /** docs/Batch_Computing/Slurm/foo.md -> https://docs.nesi.org.nz/Batch_Computing/Slurm/foo/ */
 export function pathToUrl(relPath, siteUrl = "https://docs.nesi.org.nz/") {
   let p = relPath.replace(/\\/g, "/").replace(/\.md$/, "");
-  if (p.endsWith("/index")) p = p.slice(0, -"index".length);
+  // Nested index files (e.g. Software/Available_Applications/index.md) drop
+  // just the "index" segment. The top-level docs/index.md is "index" with no
+  // leading slash, so the same suffix check missed it — it kept resolving to
+  // .../index/ instead of the site root, which 404s.
+  if (p === "index" || p.endsWith("/index")) p = p.slice(0, p.length - "index".length);
+  if (p.endsWith("/")) p = p.slice(0, -1); // avoid a double "//" once the trailing slash is re-added below
   return siteUrl + (p ? p + "/" : "");
 }
 
@@ -150,11 +155,15 @@ function splitLong(text) {
   return parts;
 }
 
-export function chunkFile(absPath, docsRoot, siteUrl) {
-  const raw = readFileSync(absPath, "utf8");
-  const relPath = relative(docsRoot, absPath);
-  const { meta, body } = parseFrontmatter(raw);
-  const cleaned = cleanMarkdown(body);
+/**
+ * The chunking logic proper, independent of where the body markdown came
+ * from — the local raw .md (via cleanMarkdown, see chunkFile) or a page
+ * fetched and converted from docs.nesi.org.nz (see ingest.mjs), which
+ * resolves Jinja includes the raw source can't (module version tables, the
+ * support-contact link). Frontmatter (meta) always comes from the raw .md
+ * either way — the rendered page doesn't expose it reliably.
+ */
+export function chunkBody(relPath, meta, cleaned, siteUrl) {
   if (cleaned.length < 80) return []; // stub/redirect pages
   const { title: h1, sections } = splitSections(cleaned);
   const title = h1 || relPath.split("/").pop().replace(/\.md$/, "").replace(/[-_]/g, " ");
@@ -198,7 +207,22 @@ export function chunkFile(absPath, docsRoot, siteUrl) {
   });
 }
 
-export function chunkRepo(docsRoot, siteUrl = "https://docs.nesi.org.nz/") {
+/** Local-only path: read the raw .md, resolve what its own regex-based cleaning can, chunk it. */
+export function chunkFile(absPath, docsRoot, siteUrl) {
+  const raw = readFileSync(absPath, "utf8");
+  const relPath = relative(docsRoot, absPath);
+  const { meta, body } = parseFrontmatter(raw);
+  return chunkBody(relPath, meta, cleanMarkdown(body), siteUrl);
+}
+
+/** Frontmatter only, for callers (ingest.mjs) that source the body elsewhere. */
+export function readFrontmatter(absPath) {
+  return parseFrontmatter(readFileSync(absPath, "utf8")).meta;
+}
+
+export const DEFAULT_SITE_URL = "https://docs.nesi.org.nz/";
+
+export function chunkRepo(docsRoot, siteUrl = DEFAULT_SITE_URL) {
   const chunks = [];
   for (const file of walkMarkdown(docsRoot)) chunks.push(...chunkFile(file, docsRoot, siteUrl));
   return chunks;

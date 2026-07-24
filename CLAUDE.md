@@ -19,7 +19,8 @@ Four-stage RAG pipeline (`retrieve()` in worker.js):
 
 Ingest pipeline (offline, `scripts/`):
 - `chunker.mjs` — markdown-aware. Splits on `##`/`###` headings, merges sections `< MIN_CHARS=400`, splits `> MAX_CHARS=3200`, targets `TARGET_CHARS=2200` (~450 tokens). `embedText` prepends breadcrumb + frontmatter description + tags so chunks carry context into vector space. Stable ids `path#chunkIndex`, or `sha256(path)[0:12]-<tail>#chunkIndex` when the path pushes the id past Vectorize's 64-byte limit (`chunkId()`). Ids must stay deterministic — that's what makes re-ingest overwrite in place.
-- `ingest.mjs` — calls chunker, embeds in batches of 50 via the CF REST API, upserts NDJSON to Vectorize. Re-runnable: stable ids overwrite in place.
+- `ingest.mjs` — for each local doc, fetches the *rendered* docs.nesi.org.nz page (resolves mkdocs-macros Jinja includes the raw `.md` can't — module version tables, the support-contact link) via `renderedPage.mjs` (cheerio + turndown), falling back to the raw-markdown path on fetch failure/404/thin content; then batches by an estimated token budget (not a fixed count — Workers AI's context cap is a sum across the whole embed batch) with a reactive halving retry as the real safety net; upserts NDJSON to Vectorize. Re-runnable: stable ids overwrite in place. `--dry-run` runs the full fetch+chunk pass without calling Cloudflare.
+- `renderedPage.mjs` — cheerio + turndown, ingest-only dependency (`package.json`); the deployed Worker (`worker.js`) stays dependency-free.
 
 ## Commands
 
