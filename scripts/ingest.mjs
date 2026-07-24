@@ -67,15 +67,43 @@ async function upsert(vectors) {
   });
 }
 
+const MAX_BATCH = 50; // keep request bodies well under limits
+const TEXT_CHAR_CAP = 6000;
+// bge-m3's 60000-token cap is a *sum across the whole batch*, not per text.
+// A fixed count of 50 broke once chunk sizes pushed the sum past that (one
+// batch hit 76650). Chars/token varies with content, so this is a
+// deliberately conservative estimate (overestimates tokens) rather than a
+// measured ratio — the goal is never tripping the real limit, not precision.
+const CHARS_PER_TOKEN_ESTIMATE = 3;
+const MAX_BATCH_TOKENS = 45000; // safety margin under the model's 60000 cap
+
+function makeBatches(chunks) {
+  const batches = [];
+  let batch = [];
+  let tokenSum = 0;
+  for (const c of chunks) {
+    const text = c.embedText.slice(0, TEXT_CHAR_CAP);
+    const estTokens = Math.ceil(text.length / CHARS_PER_TOKEN_ESTIMATE);
+    if (batch.length && (batch.length >= MAX_BATCH || tokenSum + estTokens > MAX_BATCH_TOKENS)) {
+      batches.push(batch);
+      batch = [];
+      tokenSum = 0;
+    }
+    batch.push({ ...c, embedText: text });
+    tokenSum += estTokens;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
+}
+
 const chunks = chunkRepo(docsRoot);
 console.log(`Chunked ${new Set(chunks.map((c) => c.metadata.path)).size} files into ${chunks.length} chunks.`);
 if (DRY) { console.log("Dry run — not embedding/upserting."); process.exit(0); }
 
-const BATCH = 50; // keep request bodies well under limits
+const batches = makeBatches(chunks);
 let done = 0;
-for (let i = 0; i < chunks.length; i += BATCH) {
-  const batch = chunks.slice(i, i + BATCH);
-  const embeddings = await embedBatch(batch.map((c) => c.embedText.slice(0, 6000)));
+for (const batch of batches) {
+  const embeddings = await embedBatch(batch.map((c) => c.embedText));
   await upsert(batch.map((c, j) => ({ id: c.id, values: embeddings[j], metadata: c.metadata })));
   done += batch.length;
   process.stdout.write(`\rEmbedded + upserted ${done}/${chunks.length}`);

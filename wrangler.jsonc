@@ -1,29 +1,31 @@
 {
-  // Support Docs RAG — Worker configuration
-  // Deploy with: npx wrangler deploy
-  "name": "nesi-docs-rag",
-  "main": "src/worker.js",
-  "compatibility_date": "2026-07-01",
-
-  // Static chat UI. Requests that don't match a file fall through to the Worker.
-  "assets": {
-    "directory": "./public",
-    "binding": "ASSETS"
-  },
-
-  // Serverless GPU inference: embeddings, reranker, and the chat LLM.
-  "ai": { "binding": "AI" },
-
-  // Vector database. Create the index first:
-  //   npx wrangler vectorize create nesi-docs --dimensions=1024 --metric=cosine
-  // (1024 = bge-m3 output dimensions; cosine = right metric for text embeddings)
-  "vectorize": [
-    { "binding": "VECTORIZE", "index_name": "nesi-docs" }
-  ],
-
-  "observability": { "enabled": true }
-
-  // Secrets (set via CLI, never committed):
-  //   npx wrangler secret put API_KEY   <- optional shared secret; leave unset
-  //                                        if the Worker sits behind Cloudflare Access
+	// Support Docs RAG — Worker configuration
+	// Deploy with: npx wrangler deploy
+	"name": "nesi-docs-rag",
+	"main": "src/worker.js",
+	"compatibility_date": "2026-07-01",
+	// Static chat UI. Requests that don't match a file fall through to the Worker.
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS"
+	},
+	// Serverless GPU inference: embeddings, reranker, and the chat LLM.
+	"ai": {
+		"binding": "AI"
+	},
+	// Vector database. Create the index first:
+	//   npx wrangler vectorize create nesi-docs --dimensions=1024 --metric=cosine
+	// (1024 = bge-m3 output dimensions; cosine = right metric for text embeddings)
+	"vectorize": [
+		{
+			"binding": "VECTORIZE",
+			"index_name": "nesi-docs"
+		}
+	],
+	"observability": {
+		"enabled": true
+	}
+	// Secrets (set via CLI, never committed):
+	//   npx wrangler secret put API_KEY   <- optional shared secret; leave unset
+	//                                        if the Worker sits behind Cloudflare Access
 }
