@@ -25,7 +25,14 @@ const MIN_CHARS = 400;       // merge sections smaller than this into neighbours
 const MAX_CHARS = 3200;      // hard split above this
 const OVERLAP_CHARS = 250;   // overlap when force-splitting long sections
 
-const SKIP_DIRS = new Set(["assets"]);
+// The per-version release-note stub pages here are almost entirely the
+// support_request boilerplate (median 635 chars, one changelog bullet + a
+// "contact support" link) — their embedding is a near-pure "contact support"
+// signal, purer than Getting_Help.md itself, so they out-rank the real page
+// for any support/help query. Named precisely (not a blanket "Release_Notes"
+// skip): Announcements/Release_Notes and Interactive_Computing/OnDemand's
+// Release_Notes are real, substantive content and must stay.
+const SKIP_DIRS = new Set(["assets", "Release_Notes_my-nesi-org-nz", "Release_Notes_freezer-nesi-org-nz"]);
 const SKIP_FILES = new Set([
   "CONTRIBUTING.md", "FORMAT.md", "NEWPAGE.md", "MACROS.md", "tags.md", "updates.md", "mermaid-test.md",
 ]);
