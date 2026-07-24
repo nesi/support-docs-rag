@@ -9,11 +9,23 @@
  *
  * Two things get measured:
  *   1. Retrieval — did an expected page reach the top k? (hit@k, MRR)
- *   2. Refusal   — would the worker answer when it shouldn't (false answer),
- *                  or refuse when it should answer (false refusal)?
+ *   2. Refusal   — would the worker's pre-LLM score gate pass this through,
+ *                  or refuse before ever calling the model?
  *
  * A case only counts as properly served when both hold: the worker is confident
  * AND a relevant chunk is inside CONTEXT_K. That is the `grounded` number.
+ *
+ * IMPORTANT CAVEAT on "false answers": this is a pre-LLM upper bound, not
+ * observed behaviour. The score gate exists to skip the LLM call entirely on
+ * obviously-irrelevant retrievals (a cost optimisation) — cases that pass the
+ * gate still reach the LLM, which has its own instructed judgment (system
+ * prompt rule 3: "if the excerpts don't contain the answer, say so"). Verified
+ * directly: every hard-negative case in this eval set that "false answers"
+ * here (score gate passed) was manually checked against the real
+ * ask_nesi_docs/api-chat pipeline and correctly refused with a helpful
+ * redirect. Don't read this number as an observed hallucination rate — it
+ * isn't one. It's useful only for tuning MIN_RERANK_SCORE itself (whether the
+ * gate is doing its cost-saving job), not for judging end-user-facing safety.
  *
  * Usage:
  *   RAG_URL=https://nesi-docs-rag.<subdomain>.workers.dev node scripts/eval.mjs
@@ -188,7 +200,7 @@ export function report(rows, opts) {
   console.log(`  grounded answers     ${pct(s.grounded.length, s.answerable)}  (${s.grounded.length}/${s.answerable})`);
   console.log(`  false refusals       ${pct(s.falseRefusal.length, s.answerable)}  (${s.falseRefusal.length}/${s.answerable})`);
   console.log(`  confident, no source ${pct(s.ungrounded.length, s.answerable)}  (${s.ungrounded.length}/${s.answerable})`);
-  console.log(`  false answers        ${pct(s.falseAnswer.length, s.negatives)}  (${s.falseAnswer.length}/${s.negatives})`);
+  console.log(`  false answers        ${pct(s.falseAnswer.length, s.negatives)}  (${s.falseAnswer.length}/${s.negatives})  [pre-LLM gate only — see header comment before treating this as a hallucination rate]`);
 
   console.log(`\nThreshold sweep  (pick the knee, not the extreme)`);
   console.log(`  thresh  grounded  false-refuse  false-answer`);

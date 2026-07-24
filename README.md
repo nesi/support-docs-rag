@@ -90,9 +90,11 @@ node scripts/eval.test.mjs           # checks the scoring maths, no Worker neede
 
 Both the deployed and `--local` runs need a populated `nesi-docs` index — Vectorize has no local emulation, so `wrangler dev` binds to the remote one.
 
-The runner hits `/api/search`, so it costs no LLM tokens and is repeatable. It reports hit@k and MRR for retrieval, then scores the refusal decision the same way the Worker does (`results[0].rerankScore >= MIN_RERANK_SCORE`) and sweeps that threshold. Read the sweep as a trade-off, not a score: raising the threshold cuts false answers and adds false refusals. `MIN_RERANK_SCORE = 0.2` is an untested starting guess — the sweep is how you replace it with a number you can defend.
+The runner hits `/api/search`, so it costs no LLM tokens and is repeatable. It reports hit@k and MRR for retrieval, then scores the refusal decision the same way the Worker's *pre-LLM score gate* does (`results[0].rerankScore >= MIN_RERANK_SCORE`) and sweeps that threshold. Read the sweep as a trade-off, not a score: raising the threshold cuts false answers and adds false refusals. `MIN_RERANK_SCORE = 0.2` is an untested starting guess — the sweep is how you replace it with a number you can defend.
 
 The metric that matters most is `grounded`: confident *and* holding a relevant chunk within `CONTEXT_K`. Cases that are confident with no relevant source are the hallucination-shaped failures.
+
+**`false answers` is an upper bound, not an observed hallucination rate — don't quote it as one.** The score gate only decides whether to skip the LLM call as a cost optimisation; a case that passes it still reaches the LLM, which has its own instructed judgment (system prompt: "if the excerpts don't contain the answer, say so"). Verified directly against the real `ask_nesi_docs`/`/api/chat` pipeline: every hard-negative case that "false answers" here (PBS on a Slurm-only site, installing Windows Server on a compute node, a personal Gmail password reset, REANNZ's BGP policy, staff annual leave) was correctly refused end-to-end, each with a helpful redirect (contact support, or Google's own help for the Gmail case). If you want the true end-to-end rate, you'd need an eval mode that actually calls the LLM — costs tokens, not built here.
 
 ## Tuning knobs (src/worker.js)
 
