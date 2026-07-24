@@ -34,8 +34,11 @@ wrangler vectorize create nesi-docs --dimensions=1024 --metric=cosine
 # 2. Deploy the Worker (serves UI + API + MCP)
 wrangler deploy
 
-# 3. Index the docs. Needs an API token with Workers AI:Read + Vectorize:Edit
-#    (dash.cloudflare.com -> My Profile -> API Tokens; account ID is on the Workers overview page)
+# 3. Index the docs. Create an Account API token with three permissions:
+#      Workers AI  Read   +  Workers AI  Edit   (the /ai/run REST endpoint needs both)
+#      Vectorize   Edit                         (upsert is a write)
+#    dash.cloudflare.com -> My Profile -> API Tokens -> Create Custom Token,
+#    scoped to this account only. Account ID is on the Workers overview page.
 git clone https://github.com/nesi/support-docs
 export CLOUDFLARE_ACCOUNT_ID=...
 export CLOUDFLARE_API_TOKEN=...

@@ -32,7 +32,8 @@ npx wrangler deploy
 # Create the vector index (first time only)
 npx wrangler vectorize create nesi-docs --dimensions=1024 --metric=cosine
 
-# Index the docs (needs a token with Workers AI:Read + Vectorize:Edit)
+# Index the docs. Account API token needs: Workers AI Read + Workers AI Edit
+# (the /ai/run REST endpoint requires both) and Vectorize Edit (upsert is a write).
 export CLOUDFLARE_ACCOUNT_ID=...
 export CLOUDFLARE_API_TOKEN=...
 node scripts/ingest.mjs /path/to/support-docs/docs [--index nesi-docs] [--dry-run]
