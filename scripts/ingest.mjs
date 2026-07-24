@@ -69,7 +69,13 @@ function extractCanonical(html, baseUrl) {
   }
 }
 
-/** null return = confirmed 404 (page doesn't exist there — no point retrying). Throws on anything else after one retry. */
+/**
+ * null = confirmed 404 (page doesn't exist there — no point retrying).
+ * Throws on anything else after one retry. finalUrl is the post-redirect
+ * URL — callers need it because two different local files can both redirect
+ * to the same current page (an old page merged into another), and the
+ * citation should point at the real destination, not the stub.
+ */
 async function fetchRenderedPage(url, depth = 0) {
   for (let attempt = 0; ; attempt++) {
     const controller = new AbortController();
@@ -85,7 +91,7 @@ async function fetchRenderedPage(url, depth = 0) {
           const canonical = extractCanonical(html, url);
           if (canonical && canonical !== url) return fetchRenderedPage(canonical, depth + 1);
         }
-        return html;
+        return { html, finalUrl: url };
       }
       if (res.status === 404) return null;
       if (attempt >= 1) throw new Error(`${url} -> ${res.status}`);
@@ -97,19 +103,27 @@ async function fetchRenderedPage(url, depth = 0) {
   }
 }
 
-/** Rendered HTML when it's usable, else the local raw-markdown path — always tagged with which one and why. */
+/**
+ * Rendered HTML when it's usable, else the local raw-markdown path — always
+ * tagged with which one and why. When the html path succeeds, finalUrl is
+ * set — the caller uses it to detect two local files redirecting to the
+ * same current page (e.g. an old page merged into another) and dedup them.
+ */
 async function gatherChunksForFile(absPath, docsRoot) {
   const relPath = relative(docsRoot, absPath);
   const meta = readFrontmatter(absPath);
   const url = pathToUrl(relPath, SITE_URL);
   let reason;
   try {
-    const html = await fetchRenderedPage(url);
-    if (html === null) {
+    const fetched = await fetchRenderedPage(url);
+    if (fetched === null) {
       reason = "404 on rendered site";
     } else {
+      const { html, finalUrl } = fetched;
       const body = extractBody(html);
-      if (body.length >= MIN_RENDERED_BODY_CHARS) return { path: relPath, source: "html", chunks: chunkBody(relPath, meta, body, SITE_URL) };
+      if (body.length >= MIN_RENDERED_BODY_CHARS) {
+        return { path: relPath, source: "html", finalUrl, chunks: chunkBody(relPath, meta, body, finalUrl) };
+      }
       reason = "rendered content too short (theme change, or content container not found)";
     }
   } catch (e) {
@@ -241,8 +255,37 @@ const results = await mapLimit(files, FETCH_CONCURRENCY, async (absPath) => {
 });
 process.stdout.write("\n");
 
+// Some old local files redirect to the SAME current page (one page merged
+// into another upstream) — indexing both would duplicate that content under
+// two different ids. Deduped as a synchronous pass over completed results
+// (not a check-then-claim during the concurrent fetch above) so the winner
+// is deterministic across runs: whichever concurrent fetch happens to finish
+// first isn't reproducible, and a non-reproducible winner would mean each
+// re-ingest could pick a different id scheme for the same content, leaving
+// the previous run's orphaned vectors behind — Vectorize never deletes on
+// upsert. Sorting by path picks the same winner every time.
+const byFinalUrl = new Map();
+for (const r of results) {
+  if (!r.finalUrl) continue;
+  if (!byFinalUrl.has(r.finalUrl)) byFinalUrl.set(r.finalUrl, []);
+  byFinalUrl.get(r.finalUrl).push(r);
+}
+const duplicateGroups = [...byFinalUrl.values()].filter((g) => g.length > 1);
+for (const group of duplicateGroups) {
+  group.sort((a, b) => a.path.localeCompare(b.path));
+  for (const loser of group.slice(1)) {
+    loser.chunks = [];
+    loser.duplicateOf = group[0].path;
+  }
+}
+
 const chunks = results.flatMap((r) => r.chunks);
 console.log(`Chunked ${new Set(chunks.map((c) => c.metadata.path)).size} files into ${chunks.length} chunks.`);
+
+if (duplicateGroups.length) {
+  console.log(`${duplicateGroups.length} page(s) merged upstream — indexed once, not once per redirecting file:`);
+  for (const group of duplicateGroups) console.log(`  ${group.map((g) => g.path).join(" + ")} -> ${group[0].finalUrl}`);
+}
 
 const fallbacks = results.filter((r) => r.source === "fallback");
 if (fallbacks.length) {

@@ -162,13 +162,17 @@ function splitLong(text) {
  * resolves Jinja includes the raw source can't (module version tables, the
  * support-contact link). Frontmatter (meta) always comes from the raw .md
  * either way — the rendered page doesn't expose it reliably.
+ *
+ * `url` is the page's final, no-redirect URL, not just siteUrl+relPath: some
+ * pages redirect (e.g. a filename casing mismatch, or two old files merged
+ * into one current page) — see ingest.mjs's canonical-link follow. Citations
+ * should point at the real destination, not a client-side redirect stub.
  */
-export function chunkBody(relPath, meta, cleaned, siteUrl) {
+export function chunkBody(relPath, meta, cleaned, url) {
   if (cleaned.length < 80) return []; // stub/redirect pages
   const { title: h1, sections } = splitSections(cleaned);
   const title = h1 || relPath.split("/").pop().replace(/\.md$/, "").replace(/[-_]/g, " ");
   const breadcrumb = relPath.split("/").slice(0, -1).map((s) => s.replace(/_/g, " ")).join(" > ");
-  const url = pathToUrl(relPath, siteUrl);
 
   // Greedily merge small adjacent sections; split big ones.
   const blocks = [];
@@ -212,7 +216,7 @@ export function chunkFile(absPath, docsRoot, siteUrl) {
   const raw = readFileSync(absPath, "utf8");
   const relPath = relative(docsRoot, absPath);
   const { meta, body } = parseFrontmatter(raw);
-  return chunkBody(relPath, meta, cleanMarkdown(body), siteUrl);
+  return chunkBody(relPath, meta, cleanMarkdown(body), pathToUrl(relPath, siteUrl));
 }
 
 /** Frontmatter only, for callers (ingest.mjs) that source the body elsewhere. */
