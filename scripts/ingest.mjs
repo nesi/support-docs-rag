@@ -34,6 +34,16 @@ if (!DRY && (!ACCOUNT || !TOKEN)) { console.error("Set CLOUDFLARE_ACCOUNT_ID and
 
 const API = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}`;
 
+const CONTEXT_LIMIT_CODE = 3030; // Workers AI: "Max context reached"
+
+class CfApiError extends Error {
+  constructor(path, status, errors) {
+    super(`${path} -> ${status}: ${JSON.stringify(errors).slice(0, 500)}`);
+    this.status = status;
+    this.errors = errors;
+  }
+}
+
 async function cfFetch(path, init) {
   const res = await fetch(`${API}${path}`, {
     ...init,
@@ -41,7 +51,7 @@ async function cfFetch(path, init) {
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok || body.success === false) {
-    throw new Error(`${path} -> ${res.status}: ${JSON.stringify(body.errors || body).slice(0, 500)}`);
+    throw new CfApiError(path, res.status, body.errors || [body]);
   }
   return body.result ?? body;
 }
@@ -58,6 +68,30 @@ async function embedBatch(texts) {
   return vectors;
 }
 
+/**
+ * Char-per-token ratio in makeBatches() is a rough prior, not a measured
+ * constant — NeSI's docs mix prose with Slurm scripts, file paths, and CLI
+ * flags, and code-like text tokenizes far less efficiently than English
+ * prose (observed ~1.7 chars/token here, not the ~3 first assumed). Rather
+ * than chase the "right" constant for a corpus that varies chunk to chunk,
+ * this is the actual safety net: on the model's real context-limit error,
+ * halve the batch and retry each half. Bottoms out at single chunks, each
+ * well under the limit on their own (TEXT_CHAR_CAP caps every text at 6000
+ * chars — at worst 1 char/token, 6000 tokens, far under the 60000 cap).
+ */
+async function embedBatchSafe(batch) {
+  try {
+    return await embedBatch(batch.map((c) => c.embedText));
+  } catch (e) {
+    const isContextLimit = e instanceof CfApiError && e.errors?.some((x) => x.code === CONTEXT_LIMIT_CODE);
+    if (!isContextLimit || batch.length <= 1) throw e;
+    const mid = Math.ceil(batch.length / 2);
+    const left = await embedBatchSafe(batch.slice(0, mid));
+    const right = await embedBatchSafe(batch.slice(mid));
+    return [...left, ...right];
+  }
+}
+
 async function upsert(vectors) {
   const ndjson = vectors.map((v) => JSON.stringify(v)).join("\n");
   return cfFetch(`/vectorize/v2/indexes/${INDEX}/upsert`, {
@@ -70,12 +104,14 @@ async function upsert(vectors) {
 const MAX_BATCH = 50; // keep request bodies well under limits
 const TEXT_CHAR_CAP = 6000;
 // bge-m3's 60000-token cap is a *sum across the whole batch*, not per text.
-// A fixed count of 50 broke once chunk sizes pushed the sum past that (one
-// batch hit 76650). Chars/token varies with content, so this is a
-// deliberately conservative estimate (overestimates tokens) rather than a
-// measured ratio — the goal is never tripping the real limit, not precision.
-const CHARS_PER_TOKEN_ESTIMATE = 3;
-const MAX_BATCH_TOKENS = 45000; // safety margin under the model's 60000 cap
+// This estimate just keeps batch count reasonable in the common case — the
+// real guarantee is embedBatchSafe()'s reactive split above, since no fixed
+// ratio holds across chunks this different (prose FAQs vs. Slurm scripts).
+// Observed on this corpus: ~1.7 chars/token, well below the ~4 a plain-English
+// guess would suggest, because dense technical text (paths, flags, code)
+// tokenizes far less efficiently than prose.
+const CHARS_PER_TOKEN_ESTIMATE = 1.7;
+const MAX_BATCH_TOKENS = 30000; // safety margin under the model's 60000 cap
 
 function makeBatches(chunks) {
   const batches = [];
@@ -103,7 +139,7 @@ if (DRY) { console.log("Dry run — not embedding/upserting."); process.exit(0);
 const batches = makeBatches(chunks);
 let done = 0;
 for (const batch of batches) {
-  const embeddings = await embedBatch(batch.map((c) => c.embedText));
+  const embeddings = await embedBatchSafe(batch);
   await upsert(batch.map((c, j) => ({ id: c.id, values: embeddings[j], metadata: c.metadata })));
   done += batch.length;
   process.stdout.write(`\rEmbedded + upserted ${done}/${chunks.length}`);
