@@ -138,13 +138,19 @@ async function mapLimit(items, limit, fn) {
 
 const pct = (n, d) => (d === 0 ? "  n/a" : `${((100 * n) / d).toFixed(1).padStart(5)}%`);
 
-function score(rows, threshold) {
+/**
+ * Rows that errored carry no scores, and counting them would read a flaky
+ * request as a retrieval failure. They are excluded and reported separately.
+ */
+export function score(allRows, threshold) {
+  const rows = allRows.filter((r) => !r.error);
   const answerable = rows.filter((r) => r.expect === "answer");
   const negatives = rows.filter((r) => r.expect === "refuse");
   const confident = (r) => r.topScore !== null && r.topScore >= threshold;
 
   return {
     threshold,
+    excluded: allRows.length - rows.length,
     answerable: answerable.length,
     negatives: negatives.length,
     hits: HIT_AT.map((k) => ({ k, n: answerable.filter((r) => r.rank && r.rank <= k).length })),
@@ -160,9 +166,10 @@ function score(rows, threshold) {
   };
 }
 
-function report(rows, opts) {
+export function report(rows, opts) {
   const s = score(rows, opts.threshold);
 
+  if (s.excluded) console.log(`\n${s.excluded} case(s) excluded from all figures below (request errors)`);
   console.log(`\nRetrieval  (${s.answerable} answerable cases)`);
   for (const { k, n } of s.hits) {
     console.log(`  hit@${String(k).padEnd(2)}  ${pct(n, s.answerable)}  (${n}/${s.answerable})`);
@@ -187,7 +194,7 @@ function report(rows, opts) {
     );
   }
 
-  const missed = rows.filter((r) => r.expect === "answer" && (!r.rank || r.rank > CONTEXT_K));
+  const missed = rows.filter((r) => !r.error && r.expect === "answer" && (!r.rank || r.rank > CONTEXT_K));
   if (missed.length) {
     console.log(`\nMissed retrievals (expected page outside top ${CONTEXT_K})`);
     for (const r of missed) {
@@ -208,28 +215,31 @@ function report(rows, opts) {
 
 /* --------------------------------- main -------------------------------- */
 
-const opts = parseArgs(process.argv.slice(2));
-const cases = loadCases(opts.file);
-console.error(`${cases.length} cases -> ${opts.url}/api/search`);
+// Guarded so score()/report() can be imported and tested without a Worker.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const opts = parseArgs(process.argv.slice(2));
+  const cases = loadCases(opts.file);
+  console.error(`${cases.length} cases -> ${opts.url}/api/search`);
 
-const rows = await mapLimit(cases, CONCURRENCY, async (c) => {
-  try {
-    const r = await runCase(opts, c);
-    process.stderr.write(".");
-    return r;
-  } catch (e) {
-    process.stderr.write("!");
-    return { id: c.id, expect: c.expect, note: c.note, error: e.message, topScore: null, rank: null, top3: [] };
+  const rows = await mapLimit(cases, CONCURRENCY, async (c) => {
+    try {
+      const r = await runCase(opts, c);
+      process.stderr.write(".");
+      return r;
+    } catch (e) {
+      process.stderr.write("!");
+      return { id: c.id, expect: c.expect, note: c.note, error: e.message, topScore: null, rank: null, top3: [] };
+    }
+  });
+  process.stderr.write("\n");
+
+  const errors = rows.filter((r) => r.error);
+  if (errors.length) {
+    console.log(`\n${errors.length} request(s) failed:`);
+    for (const r of errors) console.log(`  ${r.id}: ${r.error}`);
+    if (errors.length === rows.length) process.exit(1);
   }
-});
-process.stderr.write("\n");
 
-const errors = rows.filter((r) => r.error);
-if (errors.length) {
-  console.log(`\n${errors.length} request(s) failed:`);
-  for (const r of errors) console.log(`  ${r.id}: ${r.error}`);
-  if (errors.length === rows.length) process.exit(1);
+  if (opts.json) console.log(JSON.stringify({ rows, summary: score(rows, opts.threshold) }, null, 2));
+  else report(rows, opts);
 }
-
-if (opts.json) console.log(JSON.stringify({ rows, summary: score(rows, opts.threshold) }, null, 2));
-else report(rows, opts);

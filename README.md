@@ -74,9 +74,12 @@ Don't tune the knobs below by feel — measure. `evals/questions.jsonl` holds 58
 
 ```bash
 RAG_URL=https://<your-worker>.workers.dev node scripts/eval.mjs
-node scripts/eval.mjs --local        # against `wrangler dev`
 node scripts/eval.mjs --verbose      # show the top-3 pages for each failure
+node scripts/eval.mjs --local        # against `wrangler dev`
+node scripts/eval.test.mjs           # checks the scoring maths, no Worker needed
 ```
+
+Both the deployed and `--local` runs need a populated `nesi-docs` index — Vectorize has no local emulation, so `wrangler dev` binds to the remote one.
 
 The runner hits `/api/search`, so it costs no LLM tokens and is repeatable. It reports hit@k and MRR for retrieval, then scores the refusal decision the same way the Worker does (`results[0].rerankScore >= MIN_RERANK_SCORE`) and sweeps that threshold. Read the sweep as a trade-off, not a score: raising the threshold cuts false answers and adds false refusals. `MIN_RERANK_SCORE = 0.2` is an untested starting guess — the sweep is how you replace it with a number you can defend.
 
@@ -84,8 +87,8 @@ The metric that matters most is `grounded`: confident *and* holding a relevant c
 
 ## Tuning knobs (src/worker.js)
 
-`RETRIEVE_K` (20) — how wide the vector-search net is. `CONTEXT_K` (6) — how many reranked chunks the LLM sees; raise for multi-page questions, costs tokens. `MIN_RERANK_SCORE` (0.2) — the refusal threshold; raise it and the bot says "not in the docs" more often but hallucinates less. `CHAT_MODEL` — swap for `@cf/meta/llama-4-scout-17b-16e-instruct` (131k context) if you raise CONTEXT_K a lot, or point at Anthropic via AI Gateway for higher answer quality later.
+`RETRIEVE_K` (20) — how wide the vector-search net is. `CONTEXT_K` (6) — how many reranked chunks the LLM sees; raise for multi-page questions, costs tokens. `MIN_RERANK_SCORE` (0.2) — the refusal threshold; raise it and the bot says "not in the docs" more often but hallucinates less. Note the fallback path at `worker.js:100`: if the reranker call fails, `rerankScore` becomes the raw cosine score, which sits above 0.2 for almost any query — so a reranker outage effectively disables the refusal gate. The eval's threshold sweep is only valid while rerank succeeds. `CHAT_MODEL` — swap for `@cf/meta/llama-4-scout-17b-16e-instruct` (131k context) if you raise CONTEXT_K a lot, or point at Anthropic via AI Gateway for higher answer quality later.
 
 ## Files
 
-`src/worker.js` — router, retrieval pipeline, chat SSE endpoint, MCP server (no dependencies). `public/index.html` — chat UI (vanilla JS, streaming, citations). `scripts/chunker.mjs` — markdown-aware chunker. `scripts/ingest.mjs` — embed + upsert to Vectorize. `scripts/eval.mjs` — retrieval + refusal eval. `evals/questions.jsonl` — the eval cases.
+`src/worker.js` — router, retrieval pipeline, chat SSE endpoint, MCP server (no dependencies). `public/index.html` — chat UI (vanilla JS, streaming, citations). `scripts/chunker.mjs` — markdown-aware chunker. `scripts/ingest.mjs` — embed + upsert to Vectorize. `scripts/eval.mjs` — retrieval + refusal eval. `scripts/eval.test.mjs` — tests the eval's scoring. `evals/questions.jsonl` — the eval cases.
