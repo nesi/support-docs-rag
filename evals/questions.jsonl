@@ -1,0 +1,58 @@
+{"id":"login-first-time","question":"How do I log in to the cluster for the first time?","expect":"answer","paths":["Getting_Started/Accessing_the_HPCs/First_Time_Login.md","Getting_Started/Accessing_the_HPCs/Connecting_to_the_Cluster.md"]}
+{"id":"login-denied","question":"My SSH login fails with permission denied, how do I fix it?","expect":"answer","paths":["Getting_Started/Accessing_the_HPCs/Login_Troubleshooting.md"]}
+{"id":"create-account","question":"How do I create a NeSI account?","expect":"answer","paths":["Getting_Started/Creating_an_Account.md"]}
+{"id":"mfa","question":"What is multi-factor authentication and do I need it to log in?","expect":"answer","paths":["Getting_Started/FAQs/What_is_Multiple_Factor_Authentication_MFA.md","Getting_Started/FAQs/What_Is_A_Trusted_Device.md"]}
+{"id":"request-memory","question":"How do I request more memory for a Slurm job?","expect":"answer","paths":["Getting_Started/FAQs/How_do_I_request_memory.md"]}
+{"id":"oom-kill","question":"My job died with 'Detected 1 oom-kill event(s)' — what does that mean?","expect":"answer","paths":["Getting_Started/FAQs/What_does_oom_kill_mean.md"]}
+{"id":"job-arrays","question":"How do I submit a Slurm job array?","expect":"answer","paths":["Batch_Computing/Job_Arrays.md","Software/Parallel_Computing/Job_Arrays.md"]}
+{"id":"request-gpu","question":"How do I request a GPU in my batch script?","expect":"answer","paths":["Batch_Computing/Using_GPUs.md"]}
+{"id":"job-priority","question":"How is the priority of my queued job decided?","expect":"answer","paths":["Batch_Computing/Job_prioritisation.md","Batch_Computing/Fair_Share.md"]}
+{"id":"job-pending","question":"Why is my job taking so long to start?","expect":"answer","paths":["Getting_Started/FAQs/Why_is_my_job_taking_a_long_time_to_start.md"]}
+{"id":"job-limits","question":"What is the maximum walltime a job can request?","expect":"answer","paths":["Batch_Computing/Job_Limits.md"]}
+{"id":"slurm-commands","question":"Which Slurm command lists my queued jobs?","expect":"answer","paths":["Getting_Started/Cheat_Sheets/Slurm-Reference_Sheet.md","Batch_Computing/Batch_Computing_Guide.md"]}
+{"id":"first-job","question":"Walk me through submitting my first job on the HPC.","expect":"answer","paths":["Tutorials/Introduction_To_HPC/Submitting_Your_First_Job.md","Batch_Computing/Batch_Computing_Guide.md"]}
+{"id":"resource-usage","question":"How do I check how much CPU and memory a finished job actually used?","expect":"answer","paths":["Batch_Computing/Checking_resource_usage.md","Software/Profiling_and_Debugging/Finding_Job_Efficiency.md"]}
+{"id":"job-efficiency","question":"How do I tell whether my job is using the resources efficiently?","expect":"answer","paths":["Software/Profiling_and_Debugging/Finding_Job_Efficiency.md","Getting_Started/Job_efficiency_review.md"]}
+{"id":"checkpointing","question":"How do I checkpoint a long-running job so it can resume?","expect":"answer","paths":["Batch_Computing/Job_Checkpointing.md"]}
+{"id":"tmpdir","question":"Where should my job write temporary files?","expect":"answer","paths":["Batch_Computing/Temporary_directories.md"]}
+{"id":"quotas","question":"What are my filesystem quotas and how do I check them?","expect":"answer","paths":["Storage/Filesystems_and_Quotas.md"]}
+{"id":"nobackup-cleaning","question":"Are files in nobackup deleted automatically?","expect":"answer","paths":["Storage/Automatic_cleaning_of_nobackup.md"]}
+{"id":"out-of-space","question":"I've run out of storage space — what do I do?","expect":"answer","paths":["Getting_Started/FAQs/Ive_run_out_of_storage_space.md","Storage/Filesystems_and_Quotas.md"]}
+{"id":"where-store-data","question":"Where should I store my data on NeSI?","expect":"answer","paths":["Getting_Started/FAQs/Where_should_I_store_my_data.md","Storage/Filesystems_and_Quotas.md"]}
+{"id":"share-files","question":"How can I let my project team members read and write my files?","expect":"answer","paths":["Getting_Started/FAQs/How_can_I_let_my_fellow_project_team_members_read_or_write_my_files.md","Storage/File_permissions_and_groups.md"]}
+{"id":"freezer","question":"What is Freezer and when should I use it?","expect":"answer","paths":["Storage/Long_Term_Storage/Freezer_long_term_storage.md","Storage/Long_Term_Storage/Freezer_Guide.md"]}
+{"id":"data-recovery","question":"I deleted a file by accident — can it be recovered?","expect":"answer","paths":["Storage/Data_Recovery.md"]}
+{"id":"globus","question":"How do I transfer data using Globus?","expect":"answer","paths":["Data_Transfer/Globus/Data_Transfer_using_Globus.md","Data_Transfer/Globus/Globus_Overview.md","Data_Transfer/Globus/First_Time_Setup.md"]}
+{"id":"rclone","question":"How do I use rclone to move data to NeSI?","expect":"answer","paths":["Data_Transfer/RClone.md"]}
+{"id":"rsync","question":"How do I copy a directory to the cluster with rsync?","expect":"answer","paths":["Data_Transfer/Rsync.md","Data_Transfer/Data_Transfer_Overview.md"]}
+{"id":"scp","question":"How do I scp a single file from my laptop to the cluster?","expect":"answer","paths":["Data_Transfer/SCP.md","Data_Transfer/Data_Transfer_Overview.md"]}
+{"id":"checksums","question":"How do I verify a transferred file is not corrupted?","expect":"answer","paths":["Data_Transfer/Checksums.md"]}
+{"id":"modules","question":"How do I find and load software modules?","expect":"answer","paths":["Software/Software_Version_Management.md","Tutorials/Introduction_To_HPC/Environment_And_Modules.md"]}
+{"id":"install-own-software","question":"Can I install my own software if it isn't already available?","expect":"answer","paths":["Software/Installing_Applications_Yourself.md","Software/Software_Installation_Request.md"]}
+{"id":"conda","question":"How do I create a conda environment on NeSI?","expect":"answer","paths":["Software/Available_Applications/Miniforge3.md"]}
+{"id":"python","question":"How do I use Python on the cluster?","expect":"answer","paths":["Software/Available_Applications/Python.md"]}
+{"id":"r-packages","question":"How do I install R packages?","expect":"answer","paths":["Software/Available_Applications/R.md"]}
+{"id":"apptainer","question":"How do I run a container with Apptainer?","expect":"answer","paths":["Software/Containers/Apptainer.md","Software/Available_Applications/Apptainer.md"]}
+{"id":"matlab","question":"How do I run MATLAB on NeSI?","expect":"answer","paths":["Software/Available_Applications/MATLAB.md"]}
+{"id":"openmp-threads","question":"How do I set the number of OpenMP threads for my job?","expect":"answer","paths":["Software/Parallel_Computing/OpenMP_settings.md"]}
+{"id":"mpi-scaling","question":"How do I work out how many MPI tasks my job should use?","expect":"answer","paths":["Software/Parallel_Computing/MPI_Scaling_Example.md","Software/Profiling_and_Debugging/Job_Scaling_Ascertaining_job_dimensions.md","Tutorials/Introduction_To_HPC/Scaling.md"]}
+{"id":"jupyter-slurm","question":"How do I run a Python notebook through Slurm?","expect":"answer","paths":["Getting_Started/FAQs/How_do_I_run_my_Python_Notebook_through_SLURM.md"]}
+{"id":"what-is-allocation","question":"What is an allocation?","expect":"answer","paths":["Getting_Started/Allocations/What_is_an_allocation.md"]}
+{"id":"extend-allocation","question":"How do I extend or request more compute allocation?","expect":"answer","paths":["Getting_Started/Allocations/Allocations_and_Extensions.md","Getting_Started/Allocations/Quarterly_allocation_periods.md"]}
+{"id":"acknowledgement","question":"How should I acknowledge NeSI in a publication?","expect":"answer","paths":["Policy/Acknowledgement-Citation_and_Publication.md"]}
+{"id":"getting-help","question":"How do I contact NeSI support?","expect":"answer","paths":["Getting_Started/Getting_Help.md","Getting_Started/Making_a_Helpful_Support_Request.md"]}
+{"id":"cluster-busy","question":"How busy is the cluster right now and how do I check?","expect":"answer","paths":["Getting_Started/FAQs/How_busy_is_the_cluster.md"]}
+{"id":"port-forwarding","question":"How do I set up SSH port forwarding to reach a service on the cluster?","expect":"answer","paths":["Getting_Started/Accessing_the_HPCs/Port_Forwarding.md"]}
+{"id":"vscode","question":"How do I connect VS Code to the cluster?","expect":"answer","paths":["Getting_Started/Accessing_the_HPCs/VSCode.md","Data_Transfer/VSCode.md"]}
+{"id":"hardware","question":"What CPUs and how much memory do the compute nodes have?","expect":"answer","paths":["Batch_Computing/Hardware.md"]}
+{"id":"pricing","question":"How much does NeSI compute cost?","expect":"answer","paths":["Service_Subscriptions/Pricing.md","Service_Subscriptions/What_is_a_Subscription.md"]}
+{"id":"refuse-pbs","question":"How do I submit a job with qsub using a PBS Pro script?","expect":"refuse","paths":[],"note":"hard negative — site is Slurm-only, reranker will surface Slurm pages"}
+{"id":"refuse-k8s","question":"How do I write a Kubernetes NetworkPolicy to restrict pod traffic?","expect":"refuse","paths":[]}
+{"id":"refuse-reannz-bgp","question":"What is REANNZ's BGP peering policy for member networks?","expect":"refuse","paths":[],"note":"different organisation"}
+{"id":"refuse-staff-leave","question":"How do I request annual leave as a NeSI staff member?","expect":"refuse","paths":[],"note":"internal HR, not user docs"}
+{"id":"refuse-windows-node","question":"How do I install Windows Server on a Mahuika compute node?","expect":"refuse","paths":[]}
+{"id":"refuse-raspberry-pi","question":"How do I add my Raspberry Pi as an extra compute node to Mahuika?","expect":"refuse","paths":[]}
+{"id":"refuse-colab-tpu","question":"How do I train a model on Google Colab TPUs?","expect":"refuse","paths":[],"note":"hard negative — docs cover TensorFlow and GPUs, not Colab"}
+{"id":"refuse-gmail","question":"How do I reset my personal Gmail password?","expect":"refuse","paths":[]}
+{"id":"refuse-parking","question":"Where do I park when visiting the NeSI office in Auckland?","expect":"refuse","paths":[]}
+{"id":"refuse-oracle-db","question":"How do I license and run an Oracle Database instance on NeSI?","expect":"refuse","paths":[],"note":"hard negative — Databases.md and Licence_Policy.md are adjacent but do not cover this"}

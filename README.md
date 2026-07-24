@@ -22,6 +22,8 @@ A retrieval-augmented assistant for [docs.nesi.org.nz](https://docs.nesi.org.nz)
 
 ## Deploy (first time, ~10 minutes)
 
+Check `npm --version` first. An old npm (6.x, common as a stale `/usr/local/bin/npm`) shadowing a Node 22 install resolves `npx wrangler` to an unrelated package, and every command below fails with `unknown subcommand`. Put your Node manager's bin directory ahead on `PATH` until `npm --version` reports 9 or newer.
+
 ```bash
 npm install -g wrangler        # or use npx wrangler everywhere
 wrangler login
@@ -64,7 +66,21 @@ claude.ai (Settings → Connectors → Add custom connector) and other MCP clien
 
 ## Keeping the index fresh
 
-`.github/workflows/reingest.yml` re-runs ingestion on every push to `docs/**` (add `CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_API_TOKEN` as GitHub secrets). Vector ids are stable (`path#chunkIndex`), so re-ingest overwrites in place. After large reorganisations (renamed/deleted pages leave stale vectors), rebuild clean: `wrangler vectorize delete nesi-docs`, recreate, re-ingest.
+Currently manual: re-run `scripts/ingest.mjs` after docs change. (A `.github/workflows/reingest.yml` triggered on pushes to `docs/**`, with `CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_API_TOKEN` as secrets, is the intended automation — not written yet.) Vector ids are stable (`path#chunkIndex`), so re-ingest overwrites in place. After large reorganisations (renamed/deleted pages leave stale vectors), rebuild clean: `wrangler vectorize delete nesi-docs`, recreate, re-ingest.
+
+## Evaluating retrieval
+
+Don't tune the knobs below by feel — measure. `evals/questions.jsonl` holds 58 cases: 48 questions the docs answer (each tagged with the pages that should be retrieved) and 10 they don't, including hard negatives like a PBS `qsub` question on a Slurm-only site.
+
+```bash
+RAG_URL=https://<your-worker>.workers.dev node scripts/eval.mjs
+node scripts/eval.mjs --local        # against `wrangler dev`
+node scripts/eval.mjs --verbose      # show the top-3 pages for each failure
+```
+
+The runner hits `/api/search`, so it costs no LLM tokens and is repeatable. It reports hit@k and MRR for retrieval, then scores the refusal decision the same way the Worker does (`results[0].rerankScore >= MIN_RERANK_SCORE`) and sweeps that threshold. Read the sweep as a trade-off, not a score: raising the threshold cuts false answers and adds false refusals. `MIN_RERANK_SCORE = 0.2` is an untested starting guess — the sweep is how you replace it with a number you can defend.
+
+The metric that matters most is `grounded`: confident *and* holding a relevant chunk within `CONTEXT_K`. Cases that are confident with no relevant source are the hallucination-shaped failures.
 
 ## Tuning knobs (src/worker.js)
 
@@ -72,4 +88,4 @@ claude.ai (Settings → Connectors → Add custom connector) and other MCP clien
 
 ## Files
 
-`src/worker.js` — router, retrieval pipeline, chat SSE endpoint, MCP server (no dependencies). `public/index.html` — chat UI (vanilla JS, streaming, citations). `scripts/chunker.mjs` — markdown-aware chunker. `scripts/ingest.mjs` — embed + upsert to Vectorize. `.github/workflows/reingest.yml` — auto-sync on docs changes.
+`src/worker.js` — router, retrieval pipeline, chat SSE endpoint, MCP server (no dependencies). `public/index.html` — chat UI (vanilla JS, streaming, citations). `scripts/chunker.mjs` — markdown-aware chunker. `scripts/ingest.mjs` — embed + upsert to Vectorize. `scripts/eval.mjs` — retrieval + refusal eval. `evals/questions.jsonl` — the eval cases.
