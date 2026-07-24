@@ -60,6 +60,13 @@ export function parseFrontmatter(raw) {
 /** Strip mkdocs-material / jinja constructs that add noise to embeddings. */
 function cleanMarkdown(text) {
   return text
+    // The generic jinja-tag strip below deletes this include with nothing to
+    // show for it — on pages where it's the whole point (e.g. Getting_Help.md,
+    // whose one paragraph is entirely this include) that erases the page's
+    // only content. Resolve it to what docs.nesi.org.nz actually renders
+    // before the generic strip runs. Confirmed against the 80 files that use
+    // it — one consistent, unparameterised call site.
+    .replace(/\{%\s*include\s*"partials\/support_request\.html"\s*%\}/g, "Contact our Support Team (support@nesi.org.nz)")
     .replace(/\{\{[^}]*\}\}/g, "")               // jinja macros
     .replace(/\{%[^%]*%\}/g, "")                 // jinja tags
     .replace(/^\s*(!!!|\?\?\?\+?)\s+(\w+)(\s+"([^"]*)")?/gm, (_, __, kind, ___, title) =>
