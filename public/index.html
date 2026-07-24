@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NeSI Support Docs Assistant</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --panel: #ffffff; --border: #e3e6ea;
+    --text: #1c2733; --muted: #61707f; --accent: #00549f; --accent-soft: #e8f1fa;
+    --code-bg: #f0f2f5; --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12161b; --panel:#1a2027; --border:#2a333d; --text:#e6ebf1; --muted:#93a1b0; --accent:#5aa2e0; --accent-soft:#1d2c3d; --code-bg:#232b34; }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); height: 100dvh; display: flex; flex-direction: column; }
+  header { padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 16px; font-weight: 650; }
+  header .badge { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 20px; padding: 2px 10px; }
+  header .spacer { flex: 1; }
+  header input { font-size: 12px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); width: 170px; }
+  main { flex: 1; overflow-y: auto; padding: 24px 0 12px; }
+  .wrap { max-width: 780px; margin: 0 auto; padding: 0 20px; }
+  .msg { margin-bottom: 18px; display: flex; flex-direction: column; }
+  .msg.user { align-items: flex-end; }
+  .bubble { max-width: 92%; padding: 10px 16px; border-radius: var(--radius); }
+  .user .bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+  .bot .bubble { background: var(--panel); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+  .bubble p { margin: 0 0 8px; } .bubble p:last-child { margin: 0; }
+  .bubble pre { background: var(--code-bg); padding: 10px 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; font-size: 13px; }
+  .bubble code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 13px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .bubble pre code { background: none; padding: 0; }
+  .bubble ul, .bubble ol { padding-left: 20px; margin: 6px 0; }
+  sup.cite { color: var(--accent); font-weight: 600; cursor: pointer; }
+  .sources { margin-top: 8px; max-width: 92%; }
+  .sources summary { font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+  .source-item { display: block; font-size: 12.5px; padding: 7px 12px; margin-top: 6px; background: var(--accent-soft); border-radius: 8px; color: var(--accent); text-decoration: none; }
+  .source-item span { color: var(--muted); display: block; font-size: 11px; }
+  .thinking { color: var(--muted); font-size: 13px; display: flex; gap: 6px; align-items: center; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: pulse 1.2s infinite; }
+  .dot:nth-child(2) { animation-delay: .2s; } .dot:nth-child(3) { animation-delay: .4s; }
+  @keyframes pulse { 0%, 60%, 100% { opacity: .3 } 30% { opacity: 1 } }
+  footer { padding: 12px 0 18px; background: var(--bg); }
+  .inputrow { display: flex; gap: 10px; }
+  textarea { flex: 1; resize: none; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); color: var(--text); font: inherit; max-height: 140px; }
+  textarea:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  button { padding: 0 22px; border: none; border-radius: var(--radius); background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; text-align: center; }
+  .suggestions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 30px 0; }
+  .suggestions button { background: var(--panel); color: var(--text); border: 1px solid var(--border); font-weight: 400; font-size: 13px; padding: 8px 14px; border-radius: 20px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>NeSI Support Docs Assistant</h1>
+  <span class="badge">grounded on docs.nesi.org.nz</span>
+  <span class="spacer"></span>
+  <input id="apikey" type="password" placeholder="API key (if required)" title="Leave empty if behind Cloudflare Access">
+</header>
+<main><div class="wrap" id="chat">
+  <div class="suggestions" id="suggestions">
+    <button>How do I submit a Slurm job?</button>
+    <button>Why is my job stuck in the queue?</button>
+    <button>How do I transfer large files with Globus?</button>
+    <button>How much storage do I get in my project directory?</button>
+  </div>
+</div></main>
+<footer><div class="wrap">
+  <div class="inputrow">
+    <textarea id="input" rows="1" placeholder="Ask about NeSI HPC, storage, Slurm, data transfer…"></textarea>
+    <button id="send">Ask</button>
+  </div>
+  <div class="hint">Answers come only from the official support docs, with citations. Verify commands before running on shared systems.</div>
+</div></footer>
+<script>
+const chat = document.getElementById("chat");
+const input = document.getElementById("input");
+const sendBtn = document.getElementById("send");
+const history = [];
+
+document.getElementById("suggestions").addEventListener("click", (e) => {
+  if (e.target.tagName === "BUTTON") { input.value = e.target.textContent; send(); }
+});
+sendBtn.addEventListener("click", send);
+input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
+input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; });
+
+function el(cls, parent) { const d = document.createElement("div"); d.className = cls; parent.appendChild(d); return d; }
+
+// Tiny markdown renderer: escapes HTML first, then code blocks, inline code,
+// bold, links, [n] citations, paragraphs. Enough for model output.
+function render(md, sources) {
+  let h = md.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const blocks = [];
+  h = h.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => { blocks.push(code); return `\x00${blocks.length - 1}\x00`; });
+  h = h.replace(/`([^`]+)`/g, "<code>$1</code>")
+       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+       .replace(/\[(\d+)\]/g, (_, n) => {
+         const s = sources && sources[n - 1];
+         return s ? `<sup class="cite" onclick="window.open('${s.url}','_blank')" title="${(s.title||"").replace(/"/g,"&quot;")}">[${n}]</sup>` : `[${n}]`;
+       })
+       .replace(/^[-*] (.+)$/gm, "<li>$1</li>")
+       .replace(/(<li>[\s\S]*?<\/li>)(?!\s*<li>)/g, "<ul>$1</ul>");
+  h = h.split(/\n{2,}/).map((p) => /^<(ul|pre)/.test(p.trim()) ? p : `<p>${p.replace(/\n/g, "<br>")}</p>`).join("");
+  h = h.replace(/\x00(\d+)\x00/g, (_, i) => `<pre><code>${blocks[i]}</code></pre>`);
+  return h;
+}
+
+async function send() {
+  const question = input.value.trim();
+  if (!question || sendBtn.disabled) return;
+  document.getElementById("suggestions")?.remove();
+  input.value = ""; input.style.height = "auto";
+  sendBtn.disabled = true;
+
+  el("msg user", chat).innerHTML = `<div class="bubble"></div>`;
+  chat.lastChild.firstChild.textContent = question;
+
+  const botMsg = el("msg bot", chat);
+  const bubble = el("bubble", botMsg);
+  bubble.innerHTML = `<div class="thinking">Searching the docs <span class="dot"></span><span class="dot"></span><span class="dot"></span></div>`;
+  chat.scrollIntoView(false);
+
+  let answer = "", sources = [];
+  try {
+    const headers = { "Content-Type": "application/json" };
+    const key = document.getElementById("apikey").value.trim();
+    if (key) headers["Authorization"] = "Bearer " + key;
+    const res = await fetch("/api/chat", { method: "POST", headers, body: JSON.stringify({ question, history }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n"); buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const ev = JSON.parse(line.slice(6));
+        if (ev.type === "sources") sources = ev.sources;
+        if (ev.type === "token") { answer += ev.text; bubble.innerHTML = render(answer, sources); chat.scrollIntoView(false); }
+      }
+    }
+    if (sources.length) {
+      const det = document.createElement("details");
+      det.className = "sources";
+      det.innerHTML = `<summary>${sources.length} sources</summary>` + sources.map((s, i) =>
+        `<a class="source-item" href="${s.url}" target="_blank">[${i + 1}] ${s.title} — ${s.heading}<span>${s.url}</span></a>`).join("");
+      botMsg.appendChild(det);
+    }
+    history.push({ role: "user", content: question }, { role: "assistant", content: answer });
+    if (history.length > 12) history.splice(0, history.length - 12);
+  } catch (err) {
+    bubble.innerHTML = `<p style="color:#c0392b">Error: ${err.message}</p>`;
+  } finally {
+    sendBtn.disabled = false;
+    input.focus();
+    chat.scrollIntoView(false);
+  }
+}
+</script>
+</body>
+</html>
