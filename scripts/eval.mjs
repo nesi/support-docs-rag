@@ -101,12 +101,20 @@ async function search(opts, query) {
   }
 }
 
-/** Strip the #heading anchor the chunker appends, so URLs compare page-to-page. */
-const pageOf = (url) => String(url || "").split("#")[0];
+/**
+ * Strip the #heading anchor the chunker appends, and lowercase, so URLs
+ * compare page-to-page regardless of case. Necessary because chunk citations
+ * now carry the site's real canonical URL (see ingest.mjs's redirect-follow),
+ * which can differ in case from a local filename's pathToUrl() output —
+ * e.g. local Automatic_cleaning_of_nobackup.md vs the site's
+ * Automatic_Cleaning_of_Nobackup. Same page either way; a case-sensitive
+ * compare here would misreport a correct top-1 hit as a total miss.
+ */
+const pageOf = (url) => String(url || "").split("#")[0].toLowerCase();
 
 async function runCase(opts, c) {
   const results = await search(opts, c.question);
-  const expected = new Set((c.paths || []).map((p) => pathToUrl(p)));
+  const expected = new Set((c.paths || []).map((p) => pageOf(pathToUrl(p))));
   const rank = results.findIndex((r) => expected.has(pageOf(r.url)));
 
   return {
