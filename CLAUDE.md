@@ -18,7 +18,7 @@ Four-stage RAG pipeline (`retrieve()` in worker.js):
 4. **Grounded answer** — `@cf/meta/llama-3.3-70b-instruct-fp8-fast` under a strict system prompt (answer only from excerpts, cite `[n]`, refuse below `MIN_RERANK_SCORE=0.2`).
 
 Ingest pipeline (offline, `scripts/`):
-- `chunker.mjs` — markdown-aware. Splits on `##`/`###` headings, merges sections `< MIN_CHARS=400`, splits `> MAX_CHARS=3200`, targets `TARGET_CHARS=2200` (~450 tokens). `embedText` prepends breadcrumb + frontmatter description + tags so chunks carry context into vector space. Stable ids `path#chunkIndex`.
+- `chunker.mjs` — markdown-aware. Splits on `##`/`###` headings, merges sections `< MIN_CHARS=400`, splits `> MAX_CHARS=3200`, targets `TARGET_CHARS=2200` (~450 tokens). `embedText` prepends breadcrumb + frontmatter description + tags so chunks carry context into vector space. Stable ids `path#chunkIndex`, or `sha256(path)[0:12]-<tail>#chunkIndex` when the path pushes the id past Vectorize's 64-byte limit (`chunkId()`). Ids must stay deterministic — that's what makes re-ingest overwrite in place.
 - `ingest.mjs` — calls chunker, embeds in batches of 50 via the CF REST API, upserts NDJSON to Vectorize. Re-runnable: stable ids overwrite in place.
 
 ## Commands

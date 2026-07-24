@@ -69,7 +69,7 @@ claude.ai (Settings → Connectors → Add custom connector) and other MCP clien
 
 ## Keeping the index fresh
 
-Currently manual: re-run `scripts/ingest.mjs` after docs change. (A `.github/workflows/reingest.yml` triggered on pushes to `docs/**`, with `CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_API_TOKEN` as secrets, is the intended automation — not written yet.) Vector ids are stable (`path#chunkIndex`), so re-ingest overwrites in place. After large reorganisations (renamed/deleted pages leave stale vectors), rebuild clean: `wrangler vectorize delete nesi-docs`, recreate, re-ingest.
+Currently manual: re-run `scripts/ingest.mjs` after docs change. (A `.github/workflows/reingest.yml` triggered on pushes to `docs/**`, with `CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_API_TOKEN` as secrets, is the intended automation — not written yet.) Vector ids are stable (`path#chunkIndex`, hashed when a long path would exceed Vectorize's 64-byte id limit), so re-ingest overwrites in place. After large reorganisations (renamed/deleted pages leave stale vectors), rebuild clean: `wrangler vectorize delete nesi-docs`, recreate, re-ingest.
 
 ## Evaluating retrieval
 

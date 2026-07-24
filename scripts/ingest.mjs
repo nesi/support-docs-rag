@@ -12,7 +12,7 @@
  *   export CLOUDFLARE_API_TOKEN=...    # token with Workers AI:Read + Vectorize:Edit
  *   node scripts/ingest.mjs /path/to/support-docs/docs [--index nesi-docs] [--dry-run]
  *
- * Re-running is safe: vector ids are stable (path#chunkIndex), so upserts
+ * Re-running is safe: vector ids are stable (see chunkId()), so upserts
  * overwrite. For a clean rebuild after big doc reorganisations:
  *   npx wrangler vectorize delete nesi-docs
  *   npx wrangler vectorize create nesi-docs --dimensions=1024 --metric=cosine

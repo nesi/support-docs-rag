@@ -16,6 +16,7 @@
  *  - `metadata`    url, title, section — stored in Vectorize, used for citations.
  */
 
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -71,6 +72,28 @@ function cleanMarkdown(text) {
 
 function slugify(heading) {
   return heading.toLowerCase().replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-");
+}
+
+// Vectorize rejects ids over 64 bytes, and 91 of the 306 doc paths are longer
+// than that on their own (the release-note directories are the worst). Ids must
+// stay stable so re-ingest overwrites in place, so long paths get a hash of the
+// full path plus a readable tail rather than a counter.
+const MAX_ID_BYTES = 64;
+const ID_SUFFIX_BYTES = 4; // "#123" — budgeted for every chunk so all chunks of
+                           // a page use the same scheme regardless of count
+const ID_HASH_CHARS = 12;
+
+/** Deterministic, <=64 bytes, readable whenever the path is short enough. */
+export function chunkId(relPath, i) {
+  const base = relPath.replace(/\.md$/, "");
+  if (Buffer.byteLength(base) + ID_SUFFIX_BYTES <= MAX_ID_BYTES) return `${base}#${i}`;
+
+  const hash = createHash("sha256").update(relPath).digest("hex").slice(0, ID_HASH_CHARS);
+  const room = MAX_ID_BYTES - ID_SUFFIX_BYTES - ID_HASH_CHARS - 1; // 1 for the "-"
+  // Keep the tail: the filename carries more signal than the directory prefix.
+  let tail = base.slice(-room);
+  while (Buffer.byteLength(tail) > room) tail = tail.slice(1); // multi-byte safety
+  return `${hash}-${tail}#${i}`;
 }
 
 /** docs/Batch_Computing/Slurm/foo.md -> https://docs.nesi.org.nz/Batch_Computing/Slurm/foo/ */
@@ -153,7 +176,7 @@ export function chunkFile(absPath, docsRoot, siteUrl) {
     const context = [breadcrumb, title].filter(Boolean).join(" > ");
     const tagLine = meta.tags?.length ? `Tags: ${meta.tags.join(", ")}` : "";
     return {
-      id: `${relPath}#${i}`,
+      id: chunkId(relPath, i),
       text: b.text,
       embedText: [context, meta.description || "", tagLine, b.text].filter(Boolean).join("\n"),
       metadata: {
@@ -179,10 +202,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const root = process.argv[2];
   const chunks = chunkRepo(root);
   const sizes = chunks.map((c) => c.text.length).sort((a, b) => a - b);
+  const idBytes = chunks.map((c) => Buffer.byteLength(c.id));
   console.log(JSON.stringify({
     chunks: chunks.length,
     files: new Set(chunks.map((c) => c.metadata.path)).size,
     charSizes: { min: sizes[0], median: sizes[Math.floor(sizes.length / 2)], p90: sizes[Math.floor(sizes.length * 0.9)], max: sizes[sizes.length - 1] },
+    // Vectorize rejects the whole batch if any id exceeds 64 bytes.
+    ids: { unique: new Set(chunks.map((c) => c.id)).size, maxBytes: Math.max(...idBytes), overLimit: idBytes.filter((n) => n > MAX_ID_BYTES).length },
   }, null, 2));
   console.log("\n--- sample chunk ---\n");
   const sample = chunks.find((c) => c.metadata.path.includes("Slurm") || c.metadata.section.includes("Batch"));
