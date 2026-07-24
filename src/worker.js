@@ -106,6 +106,8 @@ async function retrieve(env, query, topK = CONTEXT_K) {
     title: m.metadata?.title,
     heading: m.metadata?.heading,
     url: m.metadata?.url,
+    path: m.metadata?.path, // read_nesi_doc's argument — its description promises this
+
     section: m.metadata?.section,
     text: m.metadata?.text,
     vectorScore: m.score,
@@ -281,7 +283,7 @@ async function callTool(env, name, args) {
   if (name === "search_nesi_docs") {
     const results = await retrieve(env, args.query, Math.min(args.topK || 6, 20));
     const text = results.length
-      ? results.map((r, i) => `[${i + 1}] ${r.title} — ${r.heading}\nURL: ${r.url}\nRelevance: ${r.rerankScore?.toFixed(3)}\n\n${r.text}`).join("\n\n====\n\n")
+      ? results.map((r, i) => `[${i + 1}] ${r.title} — ${r.heading}\nURL: ${r.url}\nPath: ${r.path}\nRelevance: ${r.rerankScore?.toFixed(3)}\n\n${r.text}`).join("\n\n====\n\n")
       : "No relevant documentation found.";
     return { content: [{ type: "text", text }] };
   }
