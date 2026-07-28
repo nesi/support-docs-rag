@@ -19,7 +19,9 @@
 	"vectorize": [
 		{
 			"binding": "VECTORIZE",
-			"index_name": "nesi-docs"
+			"index_name": "nesi-docs",
+			// Vectorize has no local emulator; without this, `wrangler dev` can't query it at all.
+			"remote": true
 		}
 	],
 	"observability": {
