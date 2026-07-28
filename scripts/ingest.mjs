@@ -7,14 +7,13 @@
  * the user's question and ask Vectorize for the nearest vectors (cosine
  * similarity). Cheap, fast, and the index only changes when the docs do.
  *
- * The body of each page is sourced from the *rendered* docs.nesi.org.nz page,
- * not the raw .md — several pages build real content (module version tables,
- * a support-contact link) from mkdocs-macros Jinja includes that only
- * resolve at site-build time, and the raw markdown source never has that
- * content. Frontmatter (description, tags) still comes from the raw .md.
- * If a page's rendered fetch fails or its extracted body is implausibly
- * short, that one page falls back to the raw-markdown path (chunkFile) —
- * logged, never silent.
+ * Body content is read straight from the local .md source — no dependency
+ * on a deployed docs.nesi.org.nz to be up to date, so ingest reflects
+ * whatever's on disk, including edits not yet pushed. The one place raw
+ * markdown alone would lose real content — the ~50 Software/Available_Applications
+ * pages, whose description/version-list/licence info comes from mkdocs-macros
+ * reading docs/assets/module-list.json — is handled by resolving that data
+ * directly (see appData.mjs) rather than running mkdocs.
  *
  * Usage:
  *   export CLOUDFLARE_ACCOUNT_ID=...   # dash.cloudflare.com -> Workers -> right sidebar
@@ -27,110 +26,9 @@
  *   npx wrangler vectorize create nesi-docs --dimensions=1024 --metric=cosine
  */
 
-import { relative } from "node:path";
-import { chunkBody, chunkFile, DEFAULT_SITE_URL, pathToUrl, readFrontmatter, walkMarkdown } from "./chunker.mjs";
-import { extractBody } from "./renderedPage.mjs";
+import { chunkRepo, DEFAULT_SITE_URL } from "./chunker.mjs";
 
 const SITE_URL = DEFAULT_SITE_URL;
-const FETCH_CONCURRENCY = 6; // polite to the live site — this isn't Cloudflare's API
-const FETCH_TIMEOUT_MS = 15000;
-const MIN_RENDERED_BODY_CHARS = 80; // matches chunkBody's own stub-page threshold
-
-/** Run with a small concurrency cap — 306 sequential fetches would be slow, 306 at once rude. */
-async function mapLimit(items, limit, fn) {
-  const out = new Array(items.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (next < items.length) {
-        const i = next++;
-        out[i] = await fn(items[i], i);
-      }
-    })
-  );
-  return out;
-}
-
-/**
- * When a raw filename's casing doesn't match the site's canonical slug (e.g.
- * "Globus-renaming.md" -> "/Globus-Renaming/"), the old URL still resolves —
- * as a client-side redirect stub (real 200, near-empty HTML, no content
- * container). Real pages always self-reference their own canonical URL, so
- * following it whenever it points elsewhere is a generic fix, not a guess at
- * a redirect-page template.
- */
-function extractCanonical(html, baseUrl) {
-  const m = html.match(/<link\s+rel="canonical"\s+href="([^"]+)"/i);
-  if (!m) return null;
-  try {
-    return new URL(m[1], baseUrl).href;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * null = confirmed 404 (page doesn't exist there — no point retrying).
- * Throws on anything else after one retry. finalUrl is the post-redirect
- * URL — callers need it because two different local files can both redirect
- * to the same current page (an old page merged into another), and the
- * citation should point at the real destination, not the stub.
- */
-async function fetchRenderedPage(url, depth = 0) {
-  for (let attempt = 0; ; attempt++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    try {
-      const res = await fetch(url, {
-        signal: controller.signal,
-        headers: { "User-Agent": "nesi-docs-rag-ingest/1.0 (internal tooling)" },
-      });
-      if (res.ok) {
-        const html = await res.text();
-        if (depth < 2) {
-          const canonical = extractCanonical(html, url);
-          if (canonical && canonical !== url) return fetchRenderedPage(canonical, depth + 1);
-        }
-        return { html, finalUrl: url };
-      }
-      if (res.status === 404) return null;
-      if (attempt >= 1) throw new Error(`${url} -> ${res.status}`);
-    } catch (e) {
-      if (attempt >= 1) throw e;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-}
-
-/**
- * Rendered HTML when it's usable, else the local raw-markdown path — always
- * tagged with which one and why. When the html path succeeds, finalUrl is
- * set — the caller uses it to detect two local files redirecting to the
- * same current page (e.g. an old page merged into another) and dedup them.
- */
-async function gatherChunksForFile(absPath, docsRoot) {
-  const relPath = relative(docsRoot, absPath);
-  const meta = readFrontmatter(absPath);
-  const url = pathToUrl(relPath, SITE_URL);
-  let reason;
-  try {
-    const fetched = await fetchRenderedPage(url);
-    if (fetched === null) {
-      reason = "404 on rendered site";
-    } else {
-      const { html, finalUrl } = fetched;
-      const body = extractBody(html);
-      if (body.length >= MIN_RENDERED_BODY_CHARS) {
-        return { path: relPath, source: "html", finalUrl, chunks: chunkBody(relPath, meta, body, finalUrl) };
-      }
-      reason = "rendered content too short (theme change, or content container not found)";
-    }
-  } catch (e) {
-    reason = e.message;
-  }
-  return { path: relPath, source: "fallback", reason, chunks: chunkFile(absPath, docsRoot, SITE_URL) };
-}
 
 const ACCOUNT = process.env.CLOUDFLARE_ACCOUNT_ID;
 const TOKEN = process.env.CLOUDFLARE_API_TOKEN;
@@ -244,58 +142,8 @@ function makeBatches(chunks) {
   return batches;
 }
 
-const files = [...walkMarkdown(docsRoot)];
-console.log(`Found ${files.length} markdown files. Fetching rendered pages from ${SITE_URL} ...`);
-let fetchedCount = 0;
-const results = await mapLimit(files, FETCH_CONCURRENCY, async (absPath) => {
-  const r = await gatherChunksForFile(absPath, docsRoot);
-  fetchedCount++;
-  process.stdout.write(`\rFetched ${fetchedCount}/${files.length}`);
-  return r;
-});
-process.stdout.write("\n");
-
-// Some old local files redirect to the SAME current page (one page merged
-// into another upstream) — indexing both would duplicate that content under
-// two different ids. Deduped as a synchronous pass over completed results
-// (not a check-then-claim during the concurrent fetch above) so the winner
-// is deterministic across runs: whichever concurrent fetch happens to finish
-// first isn't reproducible, and a non-reproducible winner would mean each
-// re-ingest could pick a different id scheme for the same content, leaving
-// the previous run's orphaned vectors behind — Vectorize never deletes on
-// upsert. Sorting by path picks the same winner every time.
-const byFinalUrl = new Map();
-for (const r of results) {
-  if (!r.finalUrl) continue;
-  if (!byFinalUrl.has(r.finalUrl)) byFinalUrl.set(r.finalUrl, []);
-  byFinalUrl.get(r.finalUrl).push(r);
-}
-const duplicateGroups = [...byFinalUrl.values()].filter((g) => g.length > 1);
-for (const group of duplicateGroups) {
-  group.sort((a, b) => a.path.localeCompare(b.path));
-  for (const loser of group.slice(1)) {
-    loser.chunks = [];
-    loser.duplicateOf = group[0].path;
-  }
-}
-
-const chunks = results.flatMap((r) => r.chunks);
+const chunks = chunkRepo(docsRoot, SITE_URL);
 console.log(`Chunked ${new Set(chunks.map((c) => c.metadata.path)).size} files into ${chunks.length} chunks.`);
-
-if (duplicateGroups.length) {
-  console.log(`${duplicateGroups.length} page(s) merged upstream — indexed once, not once per redirecting file:`);
-  for (const group of duplicateGroups) console.log(`  ${group.map((g) => g.path).join(" + ")} -> ${group[0].finalUrl}`);
-}
-
-const fallbacks = results.filter((r) => r.source === "fallback");
-if (fallbacks.length) {
-  console.log(`${fallbacks.length}/${files.length} page(s) used the local-markdown fallback (rendered page unavailable or too thin):`);
-  const byReason = new Map();
-  for (const f of fallbacks) byReason.set(f.reason, [...(byReason.get(f.reason) || []), f.path]);
-  for (const [reason, paths] of byReason) {
-    console.log(`  ${paths.length}x ${reason}: ${paths.slice(0, 3).join(", ")}${paths.length > 3 ? `, ... (${paths.length - 3} more)` : ""}`);
-  }
-}
 
 if (DRY) { console.log("Dry run — not embedding/upserting."); process.exit(0); }
 

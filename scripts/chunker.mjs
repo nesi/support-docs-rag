@@ -19,6 +19,8 @@
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { loadModuleList, resolveAppMacros, resolveCrossAppRefs } from "./appData.mjs";
+import { resolveGlossaryEntries } from "./glossaryData.mjs";
 
 const TARGET_CHARS = 2200;   // ~450 tokens
 const MIN_CHARS = 400;       // merge sections smaller than this into neighbours
@@ -163,17 +165,10 @@ function splitLong(text) {
 }
 
 /**
- * The chunking logic proper, independent of where the body markdown came
- * from — the local raw .md (via cleanMarkdown, see chunkFile) or a page
- * fetched and converted from docs.nesi.org.nz (see ingest.mjs), which
- * resolves Jinja includes the raw source can't (module version tables, the
- * support-contact link). Frontmatter (meta) always comes from the raw .md
- * either way — the rendered page doesn't expose it reliably.
- *
- * `url` is the page's final, no-redirect URL, not just siteUrl+relPath: some
- * pages redirect (e.g. a filename casing mismatch, or two old files merged
- * into one current page) — see ingest.mjs's canonical-link follow. Citations
- * should point at the real destination, not a client-side redirect stub.
+ * The chunking logic proper, given already-cleaned body markdown (see
+ * chunkFile: frontmatter parsed, app-data macros resolved, Jinja stripped).
+ * `url` is used only for citations — the deployed site's URL for this path,
+ * not where the content was read from.
  */
 export function chunkBody(relPath, meta, cleaned, url) {
   if (cleaned.length < 80) return []; // stub/redirect pages
@@ -218,12 +213,52 @@ export function chunkBody(relPath, meta, cleaned, url) {
   });
 }
 
-/** Local-only path: read the raw .md, resolve what its own regex-based cleaning can, chunk it. */
+// Cached per docsRoot so every file in a chunkRepo() run shares one parse of
+// module-list.json rather than re-reading it per page.
+const moduleListCache = new Map();
+function moduleListFor(docsRoot) {
+  if (!moduleListCache.has(docsRoot)) moduleListCache.set(docsRoot, loadModuleList(docsRoot));
+  return moduleListCache.get(docsRoot);
+}
+
+// GLOSSARY.md's entries are atomic, unrelated jargon/acronym definitions —
+// running them through chunkBody()'s MIN_CHARS merge would blur several
+// unrelated terms into one embedding, the "blurry average" failure mode this
+// chunker otherwise avoids. One chunk per surviving entry instead.
+function chunkGlossary(relPath, entries, url) {
+  return entries.map((e, i) => {
+    const names = [e.term, ...e.aliases];
+    const text = `## ${e.term}${e.aliases.length ? ` (also: ${e.aliases.join(", ")})` : ""}\n\n${e.definition}`;
+    return {
+      id: chunkId(relPath, i),
+      text,
+      embedText: `Glossary: ${names.join(", ")}\n${e.definition}`,
+      metadata: {
+        url: `${url}#${slugify(e.term)}`,
+        title: "Glossary",
+        section: relPath.split("/")[0].replace(/_/g, " "),
+        path: relPath,
+        heading: e.term,
+        text: text.slice(0, 9000),
+      },
+    };
+  });
+}
+
+/** Read the raw .md, resolve app-data macros and Jinja noise, chunk it. */
 export function chunkFile(absPath, docsRoot, siteUrl) {
   const raw = readFileSync(absPath, "utf8");
   const relPath = relative(docsRoot, absPath);
   const { meta, body } = parseFrontmatter(raw);
-  return chunkBody(relPath, meta, cleanMarkdown(body), pathToUrl(relPath, siteUrl));
+  const moduleList = moduleListFor(docsRoot);
+
+  if (relPath === "GLOSSARY.md") {
+    const entries = resolveGlossaryEntries(docsRoot, moduleList);
+    return chunkGlossary(relPath, entries, pathToUrl(relPath, siteUrl));
+  }
+
+  const resolved = resolveCrossAppRefs(resolveAppMacros(body, relPath, moduleList), moduleList);
+  return chunkBody(relPath, meta, cleanMarkdown(resolved), pathToUrl(relPath, siteUrl));
 }
 
 /** Frontmatter only, for callers (ingest.mjs) that source the body elsewhere. */
