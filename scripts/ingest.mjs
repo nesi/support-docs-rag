@@ -9,11 +9,10 @@
  *
  * Body content is read straight from the local .md source — no dependency
  * on a deployed docs.nesi.org.nz to be up to date, so ingest reflects
- * whatever's on disk, including edits not yet pushed. The one place raw
- * markdown alone would lose real content — the ~50 Software/Available_Applications
- * pages, whose description/version-list/licence info comes from mkdocs-macros
- * reading docs/assets/module-list.json — is handled by resolving that data
- * directly (see appData.mjs) rather than running mkdocs.
+ * whatever's on disk, including edits not yet pushed. Software/Available_Applications
+ * pages' `applications[...]` macros are left for the generic Jinja strip to
+ * drop — that data (module-list.json + glossary jargon) isn't ingested at
+ * all; it's looked up live instead at query time (see src/liveData.mjs).
  *
  * Usage:
  *   export CLOUDFLARE_ACCOUNT_ID=...   # dash.cloudflare.com -> Workers -> right sidebar

@@ -17,7 +17,16 @@
  * RAG concept #4 — grounding:
  * The system prompt forbids answering from model memory, requires [n]
  * citations, and we refuse outright when retrieval confidence is too low.
+ *
+ * RAG concept #5 — exact lookup alongside search:
+ * Software module names and glossary jargon are structured, name-keyed data,
+ * not prose -- liveLookup() (src/liveData.mjs) matches them directly by name
+ * at query time rather than pre-embedding all ~880 of them into Vectorize.
+ * Precise, cheap, and always current; vector search still covers everything
+ * that isn't an exact name match.
  */
+
+import { liveLookup } from "./liveData.mjs";
 
 const EMBED_MODEL = "@cf/baai/bge-m3";
 const RERANK_MODEL = "@cf/baai/bge-reranker-base";
@@ -77,6 +86,9 @@ async function embed(env, text) {
 }
 
 async function retrieve(env, query, topK = CONTEXT_K) {
+  const liveHits = await liveLookup(query).catch((e) => { console.warn("live lookup failed", e); return []; });
+  if (liveHits.length >= topK) return liveHits.slice(0, topK); // exact matches alone fill the request -- skip embed/search/rerank
+
   const vector = await embed(env, query);
   const result = await env.VECTORIZE.query(vector, {
     topK: RETRIEVE_K,
@@ -84,25 +96,26 @@ async function retrieve(env, query, topK = CONTEXT_K) {
     returnMetadata: "all",
   });
   const matches = result.matches ?? [];
-  if (matches.length === 0) return [];
 
   // Second stage: cross-encoder rerank.
-  let ranked = matches;
-  try {
-    const rr = await env.AI.run(RERANK_MODEL, {
-      query,
-      contexts: matches.map((m) => ({ text: (m.metadata?.text || "").slice(0, 2000) })),
-    });
-    const scores = rr.response ?? rr; // [{id, score}] where id = index into contexts
-    ranked = scores
-      .map((s) => ({ ...matches[s.id], rerankScore: s.score }))
-      .sort((a, b) => b.rerankScore - a.rerankScore);
-  } catch (e) {
-    console.warn("rerank failed, falling back to vector order", e);
-    ranked = matches.map((m) => ({ ...m, rerankScore: m.score }));
+  let ranked = [];
+  if (matches.length) {
+    try {
+      const rr = await env.AI.run(RERANK_MODEL, {
+        query,
+        contexts: matches.map((m) => ({ text: (m.metadata?.text || "").slice(0, 2000) })),
+      });
+      const scores = rr.response ?? rr; // [{id, score}] where id = index into contexts
+      ranked = scores
+        .map((s) => ({ ...matches[s.id], rerankScore: s.score }))
+        .sort((a, b) => b.rerankScore - a.rerankScore);
+    } catch (e) {
+      console.warn("rerank failed, falling back to vector order", e);
+      ranked = matches.map((m) => ({ ...m, rerankScore: m.score }));
+    }
   }
 
-  return ranked.slice(0, topK).map((m) => ({
+  const vectorSources = ranked.map((m) => ({
     title: m.metadata?.title,
     heading: m.metadata?.heading,
     url: m.metadata?.url,
@@ -113,6 +126,9 @@ async function retrieve(env, query, topK = CONTEXT_K) {
     vectorScore: m.score,
     rerankScore: m.rerankScore,
   }));
+
+  // Live hits first: rerankScore 1 sorts them ahead and clears MIN_RERANK_SCORE outright.
+  return [...liveHits, ...vectorSources].slice(0, topK);
 }
 
 function buildContext(sources) {
@@ -283,7 +299,7 @@ async function callTool(env, name, args) {
   if (name === "search_nesi_docs") {
     const results = await retrieve(env, args.query, Math.min(args.topK || 6, 20));
     const text = results.length
-      ? results.map((r, i) => `[${i + 1}] ${r.title} — ${r.heading}\nURL: ${r.url}\nPath: ${r.path}\nRelevance: ${r.rerankScore?.toFixed(3)}\n\n${r.text}`).join("\n\n====\n\n")
+      ? results.map((r, i) => `[${i + 1}] ${r.title} — ${r.heading}\nURL: ${r.url}\n${r.path ? `Path: ${r.path}\n` : ""}Relevance: ${r.rerankScore?.toFixed(3)}\n\n${r.text}`).join("\n\n====\n\n")
       : "No relevant documentation found.";
     return { content: [{ type: "text", text }] };
   }

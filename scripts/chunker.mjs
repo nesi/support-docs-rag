@@ -19,8 +19,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { loadModuleList, resolveAppMacros, resolveCrossAppRefs } from "./appData.mjs";
-import { resolveGlossaryEntries } from "./glossaryData.mjs";
 
 const TARGET_CHARS = 2200;   // ~450 tokens
 const MIN_CHARS = 400;       // merge sections smaller than this into neighbours
@@ -213,52 +211,15 @@ export function chunkBody(relPath, meta, cleaned, url) {
   });
 }
 
-// Cached per docsRoot so every file in a chunkRepo() run shares one parse of
-// module-list.json rather than re-reading it per page.
-const moduleListCache = new Map();
-function moduleListFor(docsRoot) {
-  if (!moduleListCache.has(docsRoot)) moduleListCache.set(docsRoot, loadModuleList(docsRoot));
-  return moduleListCache.get(docsRoot);
-}
-
-// GLOSSARY.md's entries are atomic, unrelated jargon/acronym definitions —
-// running them through chunkBody()'s MIN_CHARS merge would blur several
-// unrelated terms into one embedding, the "blurry average" failure mode this
-// chunker otherwise avoids. One chunk per surviving entry instead.
-function chunkGlossary(relPath, entries, url) {
-  return entries.map((e, i) => {
-    const names = [e.term, ...e.aliases];
-    const text = `## ${e.term}${e.aliases.length ? ` (also: ${e.aliases.join(", ")})` : ""}\n\n${e.definition}`;
-    return {
-      id: chunkId(relPath, i),
-      text,
-      embedText: `Glossary: ${names.join(", ")}\n${e.definition}`,
-      metadata: {
-        url: `${url}#${slugify(e.term)}`,
-        title: "Glossary",
-        section: relPath.split("/")[0].replace(/_/g, " "),
-        path: relPath,
-        heading: e.term,
-        text: text.slice(0, 9000),
-      },
-    };
-  });
-}
-
-/** Read the raw .md, resolve app-data macros and Jinja noise, chunk it. */
+// Pages under Software/Available_Applications reference `applications[...]`
+// via mkdocs-macros -- left for cleanMarkdown's generic Jinja strip to drop.
+// module-list.json/GLOSSARY.md content isn't embedded at all: src/liveData.mjs
+// looks both up live, by exact name, at query time instead (see CLAUDE.md).
 export function chunkFile(absPath, docsRoot, siteUrl) {
   const raw = readFileSync(absPath, "utf8");
   const relPath = relative(docsRoot, absPath);
   const { meta, body } = parseFrontmatter(raw);
-  const moduleList = moduleListFor(docsRoot);
-
-  if (relPath === "GLOSSARY.md") {
-    const entries = resolveGlossaryEntries(docsRoot, moduleList);
-    return chunkGlossary(relPath, entries, pathToUrl(relPath, siteUrl));
-  }
-
-  const resolved = resolveCrossAppRefs(resolveAppMacros(body, relPath, moduleList), moduleList);
-  return chunkBody(relPath, meta, cleanMarkdown(resolved), pathToUrl(relPath, siteUrl));
+  return chunkBody(relPath, meta, cleanMarkdown(body), pathToUrl(relPath, siteUrl));
 }
 
 /** Frontmatter only, for callers (ingest.mjs) that source the body elsewhere. */
