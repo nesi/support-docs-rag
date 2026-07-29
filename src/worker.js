@@ -1,5 +1,5 @@
 /**
- * NeSI Support Docs RAG — Cloudflare Worker
+ * REANNZ HPC (NeSI) Support Docs RAG — Cloudflare Worker
  *
  * Endpoints:
  *   POST /api/chat    { question, history? }  -> SSE stream: sources event, then tokens
@@ -27,10 +27,10 @@ const RETRIEVE_K = 20;      // wide net from Vectorize
 const CONTEXT_K = 6;        // chunks handed to the LLM after reranking
 const MIN_RERANK_SCORE = 0.2; // below this for the best chunk => "not in the docs"
 
-const SYSTEM_PROMPT = `You are the NeSI support assistant. You answer questions about NeSI's HPC and storage services (New Zealand eScience Infrastructure).
+const SYSTEM_PROMPT = `You are the REANNZ HPC support assistant. You answer questions about REANNZ's HPC and storage services (New Zealand eScience Infrastructure).
 
 Rules — follow all of them strictly:
-1. Answer ONLY from the documentation excerpts provided below. Never use outside knowledge about HPC, Slurm, or NeSI.
+1. Answer ONLY from the documentation excerpts provided below. Never use outside knowledge about HPC, Slurm, or REANNZ.
 2. Cite sources inline with bracketed numbers like [1] or [2][3] that refer to the numbered excerpts. Every factual claim needs a citation.
 3. If the excerpts do not contain the answer, say so plainly and suggest what to search the docs for or to contact support@nesi.org.nz. Do not guess.
 4. Preserve exact command syntax, module names, paths and Slurm directives from the excerpts — put them in code blocks.
@@ -213,7 +213,7 @@ async function handleSearch(request, env) {
 const MCP_TOOLS = [
   {
     name: "search_nesi_docs",
-    description: "Semantic search over the NeSI (New Zealand eScience Infrastructure) HPC and storage support documentation. Returns the most relevant documentation excerpts with their source URLs. Use this to ground answers about NeSI clusters, Slurm, storage, data transfer, software modules, and accounts.",
+    description: "Semantic search over the REANNZ (Research and Education Advanced Network New Zealand eScience Infrastructure) HPC and storage support documentation. Returns the most relevant documentation excerpts with their source URLs. Use this to ground answers about NeSI clusters, Slurm, storage, data transfer, software modules, and accounts.",
     inputSchema: {
       type: "object",
       properties: {
@@ -225,7 +225,7 @@ const MCP_TOOLS = [
   },
   {
     name: "ask_nesi_docs",
-    description: "Ask a question and get a complete answer grounded in the NeSI support documentation, with inline citations and source URLs. Prefer search_nesi_docs if you want to reason over raw excerpts yourself.",
+    description: "Ask a question and get a complete answer grounded in the REANNZ support documentation, with inline citations and source URLs. Prefer search_nesi_docs if you want to reason over raw excerpts yourself.",
     inputSchema: {
       type: "object",
       properties: { question: { type: "string", description: "The question to answer" } },
@@ -234,7 +234,7 @@ const MCP_TOOLS = [
   },
   {
     name: "read_nesi_doc",
-    description: "Fetch the full markdown source of a single NeSI documentation page, given its repo path (as returned in search results metadata, e.g. 'Batch_Computing/Slurm/Job_prioritisation.md').",
+    description: "Fetch the full markdown source of a single REANNZ documentation page, given its repo path (as returned in search results metadata, e.g. 'Batch_Computing/Slurm/Job_prioritisation.md').",
     inputSchema: {
       type: "object",
       properties: { path: { type: "string", description: "Repo-relative path under docs/, ending in .md" } },
