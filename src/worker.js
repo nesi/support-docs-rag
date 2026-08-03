@@ -69,6 +69,14 @@ export default {
     if (request.method === "OPTIONS") return withCors(new Response(null, { status: 204 }));
 
     try {
+      // The three routes below all call Workers AI, which is metered and has
+      // no built-in per-visitor throttle -- one shared per-IP budget across
+      // them keeps a scripted loop from running up billed usage unattended.
+      if (path === "/api/chat" || path === "/api/search" || path === "/mcp" || path === "/mcp/") {
+        const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+        const { success } = await env.RATE_LIMITER.limit({ key: ip });
+        if (!success) return withCors(json({ error: "Too many requests, please slow down." }, 429));
+      }
       if (path === "/api/chat") return withCors(await handleChat(request, env));
       if (path === "/api/search") return withCors(await handleSearch(request, env));
       if (path === "/mcp" || path === "/mcp/") return withCors(await handleMcp(request, env));
