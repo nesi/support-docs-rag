@@ -21,6 +21,15 @@ const CACHE_TTL_SECONDS = 3600;
 const APPS_SEARCH_URL = "https://docs.nesi.org.nz/Software/Available_Applications/";
 const GLOSSARY_URL = "https://docs.nesi.org.nz/GLOSSARY/";
 
+// Live hits always get rerankScore: 1 and a guaranteed context slot (see
+// retrieve() in worker.js) -- appropriate for a real named lookup, but these
+// two terms show up in almost every question about the service itself while
+// carrying near-zero information (an empty-description toolchain module for
+// "NeSI", a one-line joke definition for "HPC"), permanently crowding out a
+// vector-search result -- e.g. the actual "What Is an HPC" tutorial -- that
+// would otherwise answer the question better.
+const EXCLUDED_TERMS = new Set(["NeSI", "HPC"]);
+
 async function cachedFetch(url) {
   const cache = caches.default;
   const cacheKey = new Request(url);
@@ -52,8 +61,14 @@ async function loadTermIndex() {
   const jargon = resolveGlossaryEntries(snippetsText, moduleList);
 
   const index = new Map(); // exact-case term/alias -> hit
-  for (const [name, app] of Object.entries(moduleList)) index.set(name, { kind: "app", name, app });
-  for (const entry of jargon) for (const name of [entry.term, ...entry.aliases]) index.set(name, { kind: "jargon", entry });
+  for (const [name, app] of Object.entries(moduleList)) {
+    if (EXCLUDED_TERMS.has(name)) continue;
+    index.set(name, { kind: "app", name, app });
+  }
+  for (const entry of jargon) for (const name of [entry.term, ...entry.aliases]) {
+    if (EXCLUDED_TERMS.has(name)) continue;
+    index.set(name, { kind: "jargon", entry });
+  }
 
   const terms = [...index.keys()].sort((a, b) => b.length - a.length); // longest first
   const pattern = new RegExp(`\\b(?:${terms.map(escapeRegex).join("|")})\\b`, "g");

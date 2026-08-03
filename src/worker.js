@@ -36,15 +36,31 @@ const RETRIEVE_K = 20;      // wide net from Vectorize
 const CONTEXT_K = 6;        // chunks handed to the LLM after reranking
 const MIN_RERANK_SCORE = 0.2; // below this for the best chunk => "not in the docs"
 
-const SYSTEM_PROMPT = `You are the NeSI support assistant. You answer questions about NeSI's HPC and storage services (New Zealand eScience Infrastructure).
+// The docs site embeds a live status widget (status.nesi.org.nz) that the
+// static ingest pipeline can't capture — it's dynamic, not a doc page. This
+// is the standard unauthenticated Atlassian Statuspage summary endpoint;
+// fetched fresh (edge-cached briefly) alongside retrieval so the model can
+// tell "the docs don't cover this" apart from "this is a live outage".
+const STATUS_API = "https://status.nesi.org.nz/api/v2/summary.json";
+const STATUS_CACHE_TTL = 60; // seconds — edge cache for the status subrequest
+
+const SYSTEM_PROMPT = `You are the REANNZ HPC support assistant. You answer questions about REANNZ's HPC and storage services (Research Education Advanced Network New Zealand).
 
 Rules — follow all of them strictly:
 1. Answer ONLY from the documentation excerpts provided below. Never use outside knowledge about HPC, Slurm, or NeSI.
 2. Cite sources inline with bracketed numbers like [1] or [2][3] that refer to the numbered excerpts. Every factual claim needs a citation.
-3. If the excerpts do not contain the answer, say so plainly and suggest what to search the docs for or to contact support@nesi.org.nz. Do not guess.
-4. Preserve exact command syntax, module names, paths and Slurm directives from the excerpts — put them in code blocks.
-5. Be concise and practical. Users are researchers who want working commands.`;
-
+3. If the excerpts do not contain the answer, say so plainly and suggest what to search the docs for or to contact [support@nesi.org.nz](mailto:support@nesi.org.nz). Do not guess.
+4. Preserve exact command syntax, module names, paths and Slurm directives from the excerpts - put them in code blocks.
+5. Be concise: lead with the answer or command, no preamble ("Let's walk through some steps", "I'd be happy to help") and no closing filler ("If none of these steps work...", "If you're still having trouble..."). Give only the steps that apply to this question — don't enumerate every possible cause. Prefer a couple of sentences or short bullets over multi-paragraph explanations.
+6. The entity NeSI (New Zealand eScience Infrastructure) has been incorporated into REANNZ (Research Education Advanced Network New Zealand).
+   Avoid saying "NeSI" for the organisation — say "REANNZ HPC" instead. This does NOT apply to hardware/service names: keep using the specific name from the excerpts (e.g. "Mahuika", "HPC3", "Freezer", "OnDemand") when talking about clusters, storage, or tools.
+   Each cluster and service keeps its own single name — OnDemand is called "OnDemand", full stop, regardless of which cluster the user is on. Only prefix or combine two proper nouns together if an excerpt itself writes them that way as one phrase.
+7. Do not include unformatted links, and do not cite a link to internal documentation with itself.
+8. Information from pages about specific software should be given more weight than general information when talking about that software.
+(for example, if user asks 'How do I run ANSYS on GPUs' the small amount of information on the ANSYS page about GPUs should be weighted higher than general GPU use advice, no matter how extensive or relevent.)
+9. A "LIVE SERVICE STATUS" block may be provided above the documentation excerpts, with its own instructions on when and how prominently to use it — follow those. It reflects real-time incidents/maintenance, not documentation: never cite it with [n], and always quote its text directly rather than paraphrasing.
+10. If the user names a service, cluster, or tool that the excerpts show has been renamed, replaced, or decommissioned (e.g. Māui, JupyterHub, Nearline), say so explicitly in one short clause before answering with the current equivalent — don't just silently answer about the replacement as if that's what they asked.
+`;
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -137,6 +153,53 @@ function buildContext(sources) {
     .join("\n\n---\n\n");
 }
 
+/* --------------------------- live status ---------------------------- */
+// Fetches the Atlassian Statuspage summary. Returns null on any failure, or
+// when everything is operational — there's nothing worth surfacing to the
+// model in that case, and it keeps the "not confident" refusal path honest
+// (no live status = don't imply we checked and it's fine).
+async function fetchStatus() {
+  try {
+    const res = await fetch(STATUS_API, { cf: { cacheTtl: STATUS_CACHE_TTL, cacheEverything: true } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data?.status || data.status.indicator === "none") return null;
+
+    const incidents = (data.incidents || [])
+      .filter((i) => i.status !== "resolved" && i.status !== "postmortem")
+      .map((i) => {
+        const latest = i.incident_updates?.[0];
+        return `- ${i.name} [${i.status}, impact: ${i.impact}]${latest ? `: ${latest.body}` : ""}`;
+      });
+
+    const maintenances = (data.scheduled_maintenances || [])
+      .filter((m) => m.status === "in_progress" || m.status === "scheduled")
+      .map((m) => `- ${m.name} [${m.status}]: ${m.scheduled_for} → ${m.scheduled_until}`);
+
+    const affected = (data.components || [])
+      .filter((c) => c.status && c.status !== "operational")
+      .map((c) => `- ${c.name}: ${c.status.replace(/_/g, " ")}${c.description ? ` — ${c.description}` : ""}`);
+
+    return { indicator: data.status.indicator, description: data.status.description, incidents, maintenances, affected };
+  } catch (e) {
+    console.warn("status fetch failed", e);
+    return null;
+  }
+}
+
+function buildStatusBlock(status) {
+  if (!status) return "";
+  const parts = [`Indicator (background only, do not quote this line — use the incident detail below instead): ${status.description}`];
+  if (status.incidents.length) parts.push("Incident detail (quote this part if relevant):\n" + status.incidents.join("\n"));
+  if (status.affected.length) parts.push("Affected components (for matching to the user's question only — do not list them all in your reply):\n" + status.affected.join("\n"));
+  if (status.maintenances.length) parts.push("Scheduled maintenance:\n" + status.maintenances.join("\n"));
+  const severe = status.indicator === "major" || status.indicator === "critical";
+  const directive = severe
+    ? "This is a major/critical outage. If the user's question could plausibly be affected by it (access, jobs, storage, transfers, portals — most things, during an outage this size), your ENTIRE reply should be: which specific component(s) from the list below match their question, quoting the relevant part of the incident detail (not the indicator line, not the full component list) — then \"See https://status.nesi.org.nz for details.\" Skip doc-based troubleshooting entirely; it won't help until the outage is resolved."
+    : "Only mention this if a listed affected component is what the user's specific action actually depends on — not merely in the same general area (e.g. a tape/long-term-storage incident does not affect a live transfer into project storage). When in doubt, leave it out. If you do mention it, quote the relevant incident-detail line (not the indicator line) in one sentence, then point to https://status.nesi.org.nz for details.";
+  return "\n\n=== LIVE SERVICE STATUS (not a documentation source — never cite with [n]) ===\n" + directive + "\n\n" + parts.join("\n\n");
+}
+
 /* ---------------------------- /api/chat --------------------------- */
 async function handleChat(request, env) {
   if (request.method !== "POST") return json({ error: "POST only" }, 405);
@@ -149,17 +212,21 @@ async function handleChat(request, env) {
   const retrievalQuery = [...history.slice(-4).filter((m) => m.role === "user").map((m) => m.content), question]
     .join("\n").slice(-1000);
 
-  const sources = await retrieve(env, retrievalQuery);
+  const [sources, status] = await Promise.all([retrieve(env, retrievalQuery), fetchStatus()]);
   const confident = sources.length > 0 && sources[0].rerankScore >= MIN_RERANK_SCORE;
 
   const encoder = new TextEncoder();
   const sse = (obj) => encoder.encode(`data: ${JSON.stringify(obj)}\n\n`);
 
   if (!confident) {
+    const quote = status?.incidents[0] || status?.maintenances[0];
+    const fallback = status
+      ? `I couldn't find anything in the NeSI support docs that answers that — but there's a live status update that might explain it: "${quote}". Check https://status.nesi.org.nz for details, or contact support@nesi.org.nz if this doesn't look related.`
+      : "I couldn't find anything in the NeSI support docs that answers that. Try rephrasing with the specific service or tool name (e.g. Slurm, JupyterHub, Globus), or contact support@nesi.org.nz.";
     const body = new ReadableStream({
       start(controller) {
         controller.enqueue(sse({ type: "sources", sources: [] }));
-        controller.enqueue(sse({ type: "token", text: "I couldn't find anything in the NeSI support docs that answers that. Try rephrasing with the specific service or tool name (e.g. Slurm, JupyterHub, Globus), or contact support@nesi.org.nz." }));
+        controller.enqueue(sse({ type: "token", text: fallback }));
         controller.enqueue(sse({ type: "done" }));
         controller.close();
       },
@@ -168,7 +235,7 @@ async function handleChat(request, env) {
   }
 
   const messages = [
-    { role: "system", content: SYSTEM_PROMPT + "\n\nDocumentation excerpts:\n\n" + buildContext(sources) },
+    { role: "system", content: SYSTEM_PROMPT + buildStatusBlock(status) + "\n\nDocumentation excerpts:\n\n" + buildContext(sources) },
     ...history.slice(-6),
     { role: "user", content: question },
   ];
@@ -257,6 +324,11 @@ const MCP_TOOLS = [
       required: ["path"],
     },
   },
+  {
+    name: "check_nesi_status",
+    description: "Check live NeSI/REANNZ HPC service status (status.nesi.org.nz) for active incidents or scheduled maintenance. Use this when a user's problem could plausibly be a temporary outage rather than a usage question — e.g. jobs stuck/not starting, login failures, storage or data-transfer errors — before concluding the docs don't have an answer.",
+    inputSchema: { type: "object", properties: {} },
+  },
 ];
 
 async function handleMcp(request, env) {
@@ -304,13 +376,15 @@ async function callTool(env, name, args) {
     return { content: [{ type: "text", text }] };
   }
   if (name === "ask_nesi_docs") {
-    const sources = await retrieve(env, args.question);
+    const [sources, status] = await Promise.all([retrieve(env, args.question), fetchStatus()]);
     if (!sources.length || sources[0].rerankScore < MIN_RERANK_SCORE) {
-      return { content: [{ type: "text", text: "The NeSI support docs don't appear to cover this. Contact support@nesi.org.nz." }] };
+      const quote = status?.incidents[0] || status?.maintenances[0];
+      const note = status ? ` There is a live status update that might be relevant: "${quote}" (see status.nesi.org.nz).` : "";
+      return { content: [{ type: "text", text: `The NeSI support docs don't appear to cover this. Contact support@nesi.org.nz.${note}` }] };
     }
     const res = await env.AI.run(CHAT_MODEL, {
       messages: [
-        { role: "system", content: SYSTEM_PROMPT + "\n\nDocumentation excerpts:\n\n" + buildContext(sources) },
+        { role: "system", content: SYSTEM_PROMPT + buildStatusBlock(status) + "\n\nDocumentation excerpts:\n\n" + buildContext(sources) },
         { role: "user", content: args.question },
       ],
       max_tokens: 1024,
@@ -324,6 +398,16 @@ async function callTool(env, name, args) {
     const raw = await fetch(`https://raw.githubusercontent.com/nesi/support-docs/main/docs/${path}`);
     if (!raw.ok) throw new Error(`page not found: ${path}`);
     return { content: [{ type: "text", text: await raw.text() }] };
+  }
+  if (name === "check_nesi_status") {
+    const status = await fetchStatus();
+    const text = status
+      ? `Status: ${status.description}\n\n` +
+        (status.incidents.length ? `Active incidents:\n${status.incidents.join("\n")}\n\n` : "") +
+        (status.affected.length ? `Affected services:\n${status.affected.join("\n")}\n\n` : "") +
+        (status.maintenances.length ? `Scheduled maintenance:\n${status.maintenances.join("\n")}\n\n` : "")
+      : "All systems operational — no active incidents or scheduled maintenance reported at status.nesi.org.nz.";
+    return { content: [{ type: "text", text: text.trim() }] };
   }
   throw new Error(`unknown tool: ${name}`);
 }
