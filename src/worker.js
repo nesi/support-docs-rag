@@ -27,6 +27,8 @@
  */
 
 import { liveLookup } from "./liveData.mjs";
+import { isConfidentResponse } from "./confidence.mjs";
+import { realignSbatchBlocks, fillMissingModuleVersions, createSbatchStreamFilter } from "./slurmFormat.mjs";
 
 const EMBED_MODEL = "@cf/baai/bge-m3";
 const RERANK_MODEL = "@cf/baai/bge-reranker-base";
@@ -34,7 +36,7 @@ const CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 const RETRIEVE_K = 20;      // wide net from Vectorize
 const CONTEXT_K = 6;        // chunks handed to the LLM after reranking
-const MIN_RERANK_SCORE = 0.2; // below this for the best chunk => "not in the docs"
+const MIN_RERANK_SCORE = 0.4; // below this a chunk isn't shown as a source at all, and below this for the best chunk => "not in the docs" — see scripts/eval.test.mjs's threshold sweep for why 0.4
 
 // The docs site embeds a live status widget (status.nesi.org.nz) that the
 // static ingest pipeline can't capture — it's dynamic, not a doc page. This
@@ -60,6 +62,28 @@ Rules — follow all of them strictly:
 (for example, if user asks 'How do I run ANSYS on GPUs' the small amount of information on the ANSYS page about GPUs should be weighted higher than general GPU use advice, no matter how extensive or relevent.)
 9. A "LIVE SERVICE STATUS" block may be provided above the documentation excerpts, with its own instructions on when and how prominently to use it — follow those. It reflects real-time incidents/maintenance, not documentation: never cite it with [n], and always quote its text directly rather than paraphrasing.
 10. If the user names a service, cluster, or tool that the excerpts show has been renamed, replaced, or decommissioned (e.g. Māui, JupyterHub, Nearline), say so explicitly in one short clause before answering with the current equivalent — don't just silently answer about the replacement as if that's what they asked.
+11. When showing a Slurm submission script, use this exact shape — this overrides rule 4 for #SBATCH line formatting specifically: keep the flag names and values an excerpt gives you, but always rewrite the spacing/delimiter into the house style below, even if the excerpt itself writes that flag with \`=\` (e.g. an excerpt's \`--cpus-per-task=16\` becomes \`--cpus-per-task 16\`, column-aligned with the rest of the header).
+    - Shebang \`#!/bin/bash -e\`, then one blank line.
+    - Then the #SBATCH header: long-form flags only (--job-name, not -j), a space (not \`=\`) between flag and value — this applies to every #SBATCH line in the script, not only the three below, even ones copied from an excerpt. Every script needs --job-name, --account nesi99991, and --time, even a minimal example.
+    - Alignment: find the longest flag name used in THIS script, then pad every flag (with spaces after the flag name, before its value) so every value starts in that same column — i.e. every flag name + its padding spaces must total the same character count. Recompute this per script; do not reuse the padding width from the example below, which is sized for its own shorter flag names.
+    - One blank line after the header, then the body.
+    - Before any \`module load\`, put \`module purge\` on its own line. Always give a version with the module (e.g. \`module load Python/3.12.5-foss-2023a\`, never a bare \`module load Python\`) — use the version marked "(default)" or given in a "Load with:" line in the excerpts; if several versions are listed with no marker, use the highest one shown. Never invent a version number that isn't in the excerpts — this is rule 1 (no outside knowledge) applied to module versions specifically. If the excerpts don't give you a real name+version for the software the user asked about, use a placeholder like \`module load your_module/your_version\` and say plainly that you don't have the exact module name on hand, rather than guessing one that looks plausible.
+    - Keep the body to the bare minimum that demonstrates the concept — no extra flags, comments, or error handling beyond what's needed for a safe, correct example.
+    - Prefer a runnable example over an abstract placeholder when the excerpts give one (e.g. a tutorial's sample file via \`wget\`, a reference to \`$EB_ROOT\`) so the user can copy-paste and actually run it.
+
+    Example shape (illustrative only — real values must come from the excerpts):
+    \`\`\`
+    #!/bin/bash -e
+
+    #SBATCH --job-name    example_job
+    #SBATCH --account     nesi99991
+    #SBATCH --time        00:10:00
+
+    module purge
+    module load Python/3.12.5-foss-2023a
+
+    python my_script.py
+    \`\`\`
 `;
 export default {
   async fetch(request, env, ctx) {
@@ -109,7 +133,18 @@ async function embed(env, text) {
   return v;
 }
 
-async function retrieve(env, query, topK = CONTEXT_K) {
+// `query` (which may have prior turns folded in, for recall on follow-ups
+// like "and how much memory does that need?") drives the wide vector-search
+// net -- a broad recall step, where pulling in a prior turn's wording is
+// harmless. `rerankQuery` -- the current question alone, if given -- is
+// tried first for the precise cross-encoder scoring step, so a prior turn's
+// topic can't inflate this turn's relevance scores just because its wording
+// is still present in `query`. Only if that alone doesn't clear the
+// confidence bar (an elliptical follow-up like "and how do I check its
+// status?", meaningless without the prior turn) do we retry scoring against
+// the full folded `query`. Defaults to `query` for callers with no separate
+// history to fold, which skips the fallback entirely.
+async function retrieve(env, query, topK = CONTEXT_K, rerankQuery = query) {
   const liveHits = await liveLookup(query).catch((e) => { console.warn("live lookup failed", e); return []; });
   if (liveHits.length >= topK) return liveHits.slice(0, topK); // exact matches alone fill the request -- skip embed/search/rerank
 
@@ -122,34 +157,43 @@ async function retrieve(env, query, topK = CONTEXT_K) {
   const matches = result.matches ?? [];
 
   // Second stage: cross-encoder rerank.
-  let ranked = [];
-  if (matches.length) {
+  const rerank = async (q) => {
     try {
       const rr = await env.AI.run(RERANK_MODEL, {
-        query,
+        query: q,
         contexts: matches.map((m) => ({ text: (m.metadata?.text || "").slice(0, 2000) })),
       });
       const scores = rr.response ?? rr; // [{id, score}] where id = index into contexts
-      ranked = scores
+      return scores
         .map((s) => ({ ...matches[s.id], rerankScore: s.score }))
         .sort((a, b) => b.rerankScore - a.rerankScore);
     } catch (e) {
       console.warn("rerank failed, falling back to vector order", e);
-      ranked = matches.map((m) => ({ ...m, rerankScore: m.score }));
+      return matches.map((m) => ({ ...m, rerankScore: null }));
+    }
+  };
+
+  let ranked = [];
+  if (matches.length) {
+    ranked = await rerank(rerankQuery);
+    if (rerankQuery !== query && !(ranked[0]?.rerankScore >= MIN_RERANK_SCORE)) {
+      ranked = await rerank(query);
     }
   }
 
-  const vectorSources = ranked.map((m) => ({
-    title: m.metadata?.title,
-    heading: m.metadata?.heading,
-    url: m.metadata?.url,
-    path: m.metadata?.path, // read_nesi_doc's argument — its description promises this
+  const vectorSources = ranked
+    .filter((m) => m.rerankScore == null || m.rerankScore >= MIN_RERANK_SCORE) // drop marginal chunks rather than padding out to topK; null = rerank failed, fall back to vector order untouched
+    .map((m) => ({
+      title: m.metadata?.title,
+      heading: m.metadata?.heading,
+      url: m.metadata?.url,
+      path: m.metadata?.path, // read_nesi_doc's argument — its description promises this
 
-    section: m.metadata?.section,
-    text: m.metadata?.text,
-    vectorScore: m.score,
-    rerankScore: m.rerankScore,
-  }));
+      section: m.metadata?.section,
+      text: m.metadata?.text,
+      vectorScore: m.score,
+      rerankScore: m.rerankScore,
+    }));
 
   // Live hits first: rerankScore 1 sorts them ahead and clears MIN_RERANK_SCORE outright.
   return [...liveHits, ...vectorSources].slice(0, topK);
@@ -220,8 +264,8 @@ async function handleChat(request, env) {
   const retrievalQuery = [...history.slice(-4).filter((m) => m.role === "user").map((m) => m.content), question]
     .join("\n").slice(-1000);
 
-  const [sources, status] = await Promise.all([retrieve(env, retrievalQuery), fetchStatus()]);
-  const confident = sources.length > 0 && sources[0].rerankScore >= MIN_RERANK_SCORE;
+  const [sources, status] = await Promise.all([retrieve(env, retrievalQuery, CONTEXT_K, question), fetchStatus()]);
+  const confident = isConfidentResponse(sources, MIN_RERANK_SCORE);
 
   const encoder = new TextEncoder();
   const sse = (obj) => encoder.encode(`data: ${JSON.stringify(obj)}\n\n`);
@@ -251,9 +295,13 @@ async function handleChat(request, env) {
   const aiStream = await env.AI.run(CHAT_MODEL, { messages, stream: true, max_tokens: 1024 });
 
   // Re-emit the model's SSE stream as our own event shape, with sources first.
+  // Plain text is forwarded token-by-token as it arrives; #SBATCH blocks are
+  // buffered whole by the filter so flag alignment can be applied before
+  // they reach the client (see createSbatchStreamFilter).
   const body = new ReadableStream({
     async start(controller) {
       controller.enqueue(sse({ type: "sources", sources: sources.map(({ text, ...s }) => s) }));
+      const sbatchFilter = createSbatchStreamFilter((text) => controller.enqueue(sse({ type: "token", text })));
       const reader = aiStream.getReader();
       const decoder = new TextDecoder();
       let buf = "";
@@ -269,10 +317,11 @@ async function handleChat(request, env) {
           if (payload === "[DONE]") continue;
           try {
             const parsed = JSON.parse(payload);
-            if (parsed.response) controller.enqueue(sse({ type: "token", text: parsed.response }));
+            if (parsed.response) await sbatchFilter.push(parsed.response);
           } catch { /* partial line */ }
         }
       }
+      sbatchFilter.flush();
       controller.enqueue(sse({ type: "done" }));
       controller.close();
     },
@@ -385,7 +434,7 @@ async function callTool(env, name, args) {
   }
   if (name === "ask_nesi_docs") {
     const [sources, status] = await Promise.all([retrieve(env, args.question), fetchStatus()]);
-    if (!sources.length || sources[0].rerankScore < MIN_RERANK_SCORE) {
+    if (!isConfidentResponse(sources, MIN_RERANK_SCORE)) {
       const quote = status?.incidents[0] || status?.maintenances[0];
       const note = status ? ` There is a live status update that might be relevant: "${quote}" (see status.nesi.org.nz).` : "";
       return { content: [{ type: "text", text: `The NeSI support docs don't appear to cover this. Contact support@nesi.org.nz.${note}` }] };
@@ -398,7 +447,8 @@ async function callTool(env, name, args) {
       max_tokens: 1024,
     });
     const cites = sources.map((s, i) => `[${i + 1}] ${s.title}: ${s.url}`).join("\n");
-    return { content: [{ type: "text", text: `${res.response}\n\nSources:\n${cites}` }] };
+    const answer = realignSbatchBlocks(await fillMissingModuleVersions(res.response));
+    return { content: [{ type: "text", text: `${answer}\n\nSources:\n${cites}` }] };
   }
   if (name === "read_nesi_doc") {
     const path = String(args.path || "");

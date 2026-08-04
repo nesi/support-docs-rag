@@ -114,3 +114,10 @@ export async function liveLookup(question) {
   const termIndex = await loadTermIndex();
   return findMentions(question, termIndex).map(toSource);
 }
+
+/** The module system's own default version for an exact app name, or null if it's not a known app. */
+export async function getModuleDefault(name) {
+  const { index } = await loadTermIndex();
+  const hit = index.get(name);
+  return hit?.kind === "app" ? hit.app.default : null;
+}
