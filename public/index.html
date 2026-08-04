@@ -89,79 +89,12 @@ input.addEventListener("input", () => { input.style.height = "auto"; input.style
 
 function el(cls, parent) { const d = document.createElement("div"); d.className = cls; parent.appendChild(d); return d; }
 
-// The model is unreliable at exact character-counting and mechanical rule
-// compliance (verified: even an explicit padding algorithm in its prompt
-// didn't fix alignment reliably once flag names vary much in length).
-// Recomputing these here is exact by construction where the prompt could
-// only ever be a best-effort ask. Mirrors normalizeSlurmBlock() and
-// realignSbatchBlocks() in src/worker.js -- no shared module since this
-// project has no build step (see CLAUDE.md). Doesn't mirror worker.js's
-// module-version lookup: that needs the live module data, which only the
-// Worker can reach.
-const SBATCH_SHORT_FLAGS = {
-  "-J": "--job-name", "-A": "--account", "-t": "--time", "-n": "--ntasks", "-N": "--nodes",
-  "-c": "--cpus-per-task", "-p": "--partition", "-o": "--output", "-e": "--error",
-  "-a": "--array", "-d": "--dependency", "-D": "--chdir", "-w": "--nodelist", "-x": "--exclude",
-  "-m": "--distribution",
-};
-
-function expandShortFlag(line) {
-  const m = line.match(/^(#SBATCH\s+)(-[A-Za-z])\s+(\S.*)$/);
-  const long = m && SBATCH_SHORT_FLAGS[m[2]];
-  return long ? `${m[1]}${long} ${m[3]}` : line;
-}
-
-function normalizeSlurmBlock(body) {
-  let lines = body.split("\n").map(expandShortFlag);
-
-  const sbatchLineRe = /^(#SBATCH\s+)(--[\w-]+)[ \t]*=?[ \t]*(\S.*)$/;
-  let maxFlagLen = 0;
-  const matches = lines.map((line) => {
-    const m = line.match(sbatchLineRe);
-    if (m) maxFlagLen = Math.max(maxFlagLen, m[2].length);
-    return m;
-  });
-  const PAD = 4;
-  lines = matches.map((m, i) => {
-    if (!m) return lines[i];
-    const [, prefix, flag, rest] = m;
-    return `${prefix}${flag}${" ".repeat(maxFlagLen - flag.length + PAD)}${rest}`;
-  });
-
-  const isSbatch = (l) => /^#SBATCH\b/.test(l);
-  const isShebang = (l) => /^#!/.test(l);
-  const isModuleLoad = (l) => /^module load\b/.test(l);
-
-  const firstLoad = lines.findIndex(isModuleLoad);
-  if (firstLoad !== -1 && !lines.slice(0, firstLoad).some((l) => /^module purge\b/.test(l))) {
-    lines.splice(firstLoad, 0, "module purge");
-  }
-
-  const out = [];
-  for (let i = 0; i < lines.length; i++) {
-    out.push(lines[i]);
-    const next = lines[i + 1];
-    if (next === undefined) continue;
-    const needsBlank = (isShebang(lines[i]) && !isShebang(next)) || (isSbatch(lines[i]) && !isSbatch(next));
-    if (needsBlank && next.trim() !== "") out.push("");
-    else if (!needsBlank && lines[i].trim() === "" && next.trim() === "") continue;
-  }
-  return out.join("\n");
-}
-
-function realignSbatchBlocks(text) {
-  return text.replace(/(```[^\n]*\n)([\s\S]*?)(\n```)/g, (whole, open, body, close) => {
-    if (!/^#SBATCH\b/m.test(body)) return whole;
-    return open + normalizeSlurmBlock(body) + close;
-  });
-}
-
 // Tiny markdown renderer: escapes HTML first, then code blocks, inline code,
 // bold, links, [n] citations, paragraphs. Enough for model output.
 function render(md, sources) {
-  let h = realignSbatchBlocks(md).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  let h = md.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const blocks = [];
-  h = h.replace(/```[^\n]*\n([\s\S]*?)```/g, (_, code) => { blocks.push(code); return `\x00${blocks.length - 1}\x00`; });
+  h = h.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => { blocks.push(code); return `\x00${blocks.length - 1}\x00`; });
   h = h.replace(/`([^`]+)`/g, "<code>$1</code>")
        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
        .replace(/\[(\d+)\]/g, (_, n) => {
