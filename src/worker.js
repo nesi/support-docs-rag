@@ -21,7 +21,8 @@
 
 const EMBED_MODEL = "@cf/baai/bge-m3";
 const RERANK_MODEL = "@cf/baai/bge-reranker-base";
-const CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+// const CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const CHAT_MODEL = "@cf/ibm-granite/granite-4.0-h-micro";
 
 const RETRIEVE_K = 20;      // wide net from Vectorize
 const CONTEXT_K = 6;        // chunks handed to the LLM after reranking
