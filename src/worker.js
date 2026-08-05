@@ -32,8 +32,7 @@ import { realignSbatchBlocks, fillMissingModuleVersions, createSbatchStreamFilte
 
 const EMBED_MODEL = "@cf/baai/bge-m3";
 const RERANK_MODEL = "@cf/baai/bge-reranker-base";
-// const CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-const CHAT_MODEL = "@cf/ibm-granite/granite-4.0-h-micro";
+const CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 const RETRIEVE_K = 20;      // wide net from Vectorize
 const CONTEXT_K = 6;        // chunks handed to the LLM after reranking
@@ -356,7 +355,10 @@ async function handleChat(request, env) {
           if (payload === "[DONE]") continue;
           try {
             const parsed = JSON.parse(payload);
-            if (parsed.response) await sbatchFilter.push(parsed.response);
+            // Older Workers AI models (llama) emit {response}; newer OpenAI-compatible
+            // models (granite) emit {choices:[{delta:{content}}]} chunks instead.
+            const chunk = parsed.response ?? parsed.choices?.[0]?.delta?.content;
+            if (chunk) await sbatchFilter.push(chunk);
           } catch { /* partial line */ }
         }
       }
@@ -490,7 +492,10 @@ async function callTool(env, name, args) {
       max_tokens: 1024,
     });
     const cites = sources.map((s, i) => `[${i + 1}] ${s.title}: ${s.url}`).join("\n");
-    const answer = realignSbatchBlocks(await fillMissingModuleVersions(res.response));
+    // Older Workers AI models (llama) return {response}; newer OpenAI-compatible
+    // models (granite, mistral) return {choices:[{message:{content}}]} instead.
+    const text = res.response ?? res.choices?.[0]?.message?.content;
+    const answer = realignSbatchBlocks(await fillMissingModuleVersions(text));
     return { content: [{ type: "text", text: `${answer}\n\nSources:\n${cites}` }] };
   }
   if (name === "read_nesi_doc") {
