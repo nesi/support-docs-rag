@@ -24,6 +24,21 @@
 			"remote": true
 		}
 	],
+	// Per-IP rate limit on the AI-backed routes. This is a Worker binding, not a
+	// zone/WAF feature, so it applies whether we're on the workers.dev subdomain
+	// or a custom domain -- there's no origin behind Cloudflare here to attach a
+	// zone-level rate limiting rule to. namespace_id is just a locally-unique
+	// label, not a resource that needs provisioning.
+	"ratelimits": [
+		{
+			"name": "RATE_LIMITER",
+			"namespace_id": "1001",
+			"simple": {
+				"limit": 20,
+				"period": 60
+			}
+		}
+	],
 	"observability": {
 		"enabled": true
 	}

@@ -97,6 +97,7 @@ function render(md, sources) {
   h = h.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => { blocks.push(code); return `\x00${blocks.length - 1}\x00`; });
   h = h.replace(/`([^`]+)`/g, "<code>$1</code>")
        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+       .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
        .replace(/\[(\d+)\]/g, (_, n) => {
          const s = sources && sources[n - 1];
          return s ? `<sup class="cite" onclick="window.open('${s.url}','_blank')" title="${(s.title||"").replace(/"/g,"&quot;")}">[${n}]</sup>` : `[${n}]`;
