@@ -1,4 +1,5 @@
 import { score, report } from "./eval.mjs";
+import { isConfidentResponse } from "../src/confidence.mjs";
 
 const rows = [
   { id: "a", expect: "answer", rank: 1, topScore: 0.9, top3: [] },   // grounded
@@ -9,6 +10,21 @@ const rows = [
   { id: "f", expect: "refuse", rank: null, topScore: 0.05, top3: [] }, // correct refusal
   { id: "g", expect: "answer", rank: null, topScore: null, top3: [], error: "boom" }, // must be excluded
 ];
+
+const helperChecks = [
+  { label: "numeric rerank score", sources: [{ rerankScore: 0.3 }], want: true },
+  { label: "missing rerank score", sources: [{ rerankScore: null }], want: false },
+  { label: "empty sources", sources: [], want: false },
+];
+
+let helperFail = 0;
+for (const check of helperChecks) {
+  const got = isConfidentResponse(check.sources);
+  if (got !== check.want) {
+    console.log(`FAIL helper ${check.label}: got ${got} want ${check.want}`);
+    helperFail++;
+  }
+}
 
 const s = score(rows, 0.2);
 const got = {
@@ -34,7 +50,7 @@ const want = {
   falseAnswer: ["e"],
 };
 
-let fail = 0;
+let fail = helperFail;
 for (const k of Object.keys(want)) {
   const g = JSON.stringify(got[k]), w = JSON.stringify(want[k]);
   if (g !== w) { console.log(`FAIL ${k}: got ${g} want ${w}`); fail++; }
