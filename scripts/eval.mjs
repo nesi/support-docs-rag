@@ -44,7 +44,7 @@ import { pathToUrl } from "./chunker.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 // Mirror of the worker constants. Keep in sync with src/worker.js.
-const MIN_RERANK_SCORE = 0.2;
+const MIN_RERANK_SCORE = 0.4;
 const CONTEXT_K = 6;
 const RETRIEVE_K = 20;
 

@@ -16,7 +16,10 @@ function expandShortFlag(line) {
 }
 
 function normalizeSlurmBlock(body) {
-  let lines = body.split("\n").map(expandShortFlag);
+  // The model occasionally runs a value straight into the next #SBATCH directive with no
+  // newline (e.g. "#SBATCH --cpus-per-task4    #SBATCH --mem1200M") -- split those back apart
+  // before anything else so one bad line doesn't become one bad line forever.
+  let lines = body.split("\n").flatMap((line) => line.split(/(?=#SBATCH\s)/)).map(expandShortFlag);
 
   const sbatchLineRe = /^(#SBATCH\s+)(--[\w-]+)[ \t]*=?[ \t]*(\S.*)$/;
   let maxFlagLen = 0;
@@ -42,6 +45,9 @@ function normalizeSlurmBlock(body) {
     lines.splice(firstLoad, 0, "module purge");
   }
 
+  // Collapse any run of multiple blank lines down to one.
+  lines = lines.filter((line, i) => line.trim() !== "" || lines[i - 1]?.trim() !== "");
+
   // Exactly one blank line after the shebang, and after the #SBATCH block.
   const out = [];
   for (let i = 0; i < lines.length; i++) {
@@ -50,7 +56,6 @@ function normalizeSlurmBlock(body) {
     if (next === undefined) continue;
     const needsBlank = (isShebang(lines[i]) && !isShebang(next)) || (isSbatch(lines[i]) && !isSbatch(next));
     if (needsBlank && next.trim() !== "") out.push("");
-    else if (!needsBlank && lines[i].trim() === "" && next.trim() === "") continue; // collapse repeated blanks
   }
   return out.join("\n");
 }
@@ -66,7 +71,7 @@ export function realignSbatchBlocks(text) {
 /** Fills in the module system's default version on any bare `module load NAME` line missing one. */
 export async function fillMissingModuleVersions(text) {
   const lines = text.split("\n");
-  const moduleLoadRe = /^(\s*module load\s+)([\w+.-]+)(?:\/\S+)?\s*$/;
+  const moduleLoadRe = /^(\s*module load\s+)([\w+.-]+)\s*$/; // no trailing /version -- lines that already have one are left untouched
   for (let i = 0; i < lines.length; i++) {
     const m = lines[i].match(moduleLoadRe);
     if (!m) continue;

@@ -36,7 +36,7 @@ const CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 const RETRIEVE_K = 20;      // wide net from Vectorize
 const CONTEXT_K = 6;        // chunks handed to the LLM after reranking
-const MIN_RERANK_SCORE = 0.4; // below this a chunk isn't shown as a source at all, and below this for the best chunk => "not in the docs" — see scripts/eval.test.mjs's threshold sweep for why 0.4
+const MIN_RERANK_SCORE = 0.4; // below this a chunk isn't shown as a source at all, and below this for the best chunk => "not in the docs" — see scripts/eval.mjs's threshold sweep for why 0.4
 
 // The docs site embeds a live status widget (status.nesi.org.nz) that the
 // static ingest pipeline can't capture — it's dynamic, not a doc page. This
@@ -53,31 +53,32 @@ Rules — follow all of them strictly:
 2. Cite sources inline with bracketed numbers like [1] or [2][3] that refer to the numbered excerpts. Every factual claim needs a citation.
 3. If the excerpts do not contain the answer, say so plainly and suggest what to search the docs for or to contact [support@nesi.org.nz](mailto:support@nesi.org.nz). Do not guess.
 4. Preserve exact command syntax, module names, paths and Slurm directives from the excerpts - put them in code blocks.
-5. Be concise: lead with the answer or command, no preamble ("Let's walk through some steps", "I'd be happy to help") and no closing filler ("If none of these steps work...", "If you're still having trouble..."). Give only the steps that apply to this question — don't enumerate every possible cause. Prefer a couple of sentences or short bullets over multi-paragraph explanations.
+5. Be concise: lead with the answer or command, no preamble ("Let's walk through some steps", "I'd be happy to help") and no closing filler ("If none of these steps work...", "If you're still having trouble..."). Give only the steps that apply to this question — don't enumerate every possible cause. Prefer a couple of sentences or short bullets over multi-paragraph explanations. Give one script or one command, not several variants side by side — if the excerpts support multiple genuinely different approaches, pick the most basic/common one, or ask the user which they mean instead of dumping all of them. This applies even when the excerpts present the variants as separate tabs/sections for the same tool (e.g. "Serial" vs "Distributed Memory") — that is one question with multiple modes, not multiple questions each needing its own excerpt answered; pick the simplest (usually Serial/single-node) unless the question itself specifies scale or parallelism.
 6. The entity NeSI (New Zealand eScience Infrastructure) has been incorporated into REANNZ (Research Education Advanced Network New Zealand).
    Avoid saying "NeSI" for the organisation — say "REANNZ HPC" instead. This does NOT apply to hardware/service names: keep using the specific name from the excerpts (e.g. "Mahuika", "HPC3", "Freezer", "OnDemand") when talking about clusters, storage, or tools.
    Each cluster and service keeps its own single name — OnDemand is called "OnDemand", full stop, regardless of which cluster the user is on. Only prefix or combine two proper nouns together if an excerpt itself writes them that way as one phrase.
-7. Do not include unformatted links, and do not cite a link to internal documentation with itself.
+7. Format every web address or email address as a markdown link (e.g. \`[status.nesi.org.nz](https://status.nesi.org.nz)\`, \`[support@nesi.org.nz](mailto:support@nesi.org.nz)\`) — never output a bare URL or email address. Do not cite a link to internal documentation with itself.
 8. Information from pages about specific software should be given more weight than general information when talking about that software.
 (for example, if user asks 'How do I run ANSYS on GPUs' the small amount of information on the ANSYS page about GPUs should be weighted higher than general GPU use advice, no matter how extensive or relevent.)
-9. A "LIVE SERVICE STATUS" block may be provided above the documentation excerpts, with its own instructions on when and how prominently to use it — follow those. It reflects real-time incidents/maintenance, not documentation: never cite it with [n], and always quote its text directly rather than paraphrasing.
+9. A "LIVE SERVICE STATUS" block may be provided above the documentation excerpts, with its own instructions on when and how prominently to use it — follow those. It reflects real-time incidents/maintenance, not documentation, and always quote its text directly rather than paraphrasing.
 10. If the user names a service, cluster, or tool that the excerpts show has been renamed, replaced, or decommissioned (e.g. Māui, JupyterHub, Nearline), say so explicitly in one short clause before answering with the current equivalent — don't just silently answer about the replacement as if that's what they asked.
-11. When showing a Slurm submission script, use this exact shape — this overrides rule 4 for #SBATCH line formatting specifically: keep the flag names and values an excerpt gives you, but always rewrite the spacing/delimiter into the house style below, even if the excerpt itself writes that flag with \`=\` (e.g. an excerpt's \`--cpus-per-task=16\` becomes \`--cpus-per-task 16\`, column-aligned with the rest of the header).
+11. For job submission, the preferred and default answer is a Slurm script submitted with \`sbatch\` (see the shape below). Don't recommend OnDemand's Slurm Job Composer unless the user specifically asks about it or about a GUI/OnDemand-based workflow.
+12. When showing a Slurm submission script, use this shape — this overrides rule 4 for #SBATCH line formatting specifically. Use a single space between each flag and its value — column alignment is computed and applied downstream, not by you; do not try to pad or align the values yourself, that's how flags and values get run together or merged onto the wrong line.
+    - Exactly one script, in its own fenced code block — per rule 5, don't add a second script or a second fence for an alternate mode/variant, and never combine two scripts (or a script plus an unrelated snippet) inside one fence.
     - Shebang \`#!/bin/bash -e\`, then one blank line.
-    - Then the #SBATCH header: long-form flags only (--job-name, not -j), a space (not \`=\`) between flag and value — this applies to every #SBATCH line in the script, not only the three below, even ones copied from an excerpt. Every script needs --job-name, --account nesi99991, and --time, even a minimal example.
-    - Alignment: find the longest flag name used in THIS script, then pad every flag (with spaces after the flag name, before its value) so every value starts in that same column — i.e. every flag name + its padding spaces must total the same character count. Recompute this per script; do not reuse the padding width from the example below, which is sized for its own shorter flag names.
+    - Then the #SBATCH header: long-form flags only (--job-name, not -j). Every script needs --job-name, --account nesi99991, and --time, even a minimal example.
     - One blank line after the header, then the body.
-    - Before any \`module load\`, put \`module purge\` on its own line. Always give a version with the module (e.g. \`module load Python/3.12.5-foss-2023a\`, never a bare \`module load Python\`) — use the version marked "(default)" or given in a "Load with:" line in the excerpts; if several versions are listed with no marker, use the highest one shown. Never invent a version number that isn't in the excerpts — this is rule 1 (no outside knowledge) applied to module versions specifically. If the excerpts don't give you a real name+version for the software the user asked about, use a placeholder like \`module load your_module/your_version\` and say plainly that you don't have the exact module name on hand, rather than guessing one that looks plausible.
-    - Keep the body to the bare minimum that demonstrates the concept — no extra flags, comments, or error handling beyond what's needed for a safe, correct example.
+    - Before any \`module load\`, put \`module purge\` on its own line. Include a version if the excerpts give one; otherwise a bare \`module load NAME\` is fine. Never invent a version number that isn't in the excerpts — this is rule 1 (no outside knowledge) applied to module versions specifically.
+    - If an excerpt gives a real, complete script for the software/task asked about, reproduce its body as-is (variables, options, comments, the logic that makes it that software's script) — rule 4 governs, this is not the case the next sentence is about. Only when you're building a generic example with no specific script in the excerpts (e.g. a bare module-load demo) should you keep the body to the bare minimum needed to demonstrate the concept, with no invented flags or error handling.
     - Prefer a runnable example over an abstract placeholder when the excerpts give one (e.g. a tutorial's sample file via \`wget\`, a reference to \`$EB_ROOT\`) so the user can copy-paste and actually run it.
 
-    Example shape (illustrative only — real values must come from the excerpts):
+    Example shape (illustrative only — real values must come from the excerpts; note the single space before each value, no column alignment):
     \`\`\`
     #!/bin/bash -e
 
-    #SBATCH --job-name    example_job
-    #SBATCH --account     nesi99991
-    #SBATCH --time        00:10:00
+    #SBATCH --job-name example_job
+    #SBATCH --account nesi99991
+    #SBATCH --time 00:10:00
 
     module purge
     module load Python/3.12.5-foss-2023a
@@ -144,9 +145,15 @@ async function embed(env, text) {
 // status?", meaningless without the prior turn) do we retry scoring against
 // the full folded `query`. Defaults to `query` for callers with no separate
 // history to fold, which skips the fallback entirely.
-async function retrieve(env, query, topK = CONTEXT_K, rerankQuery = query) {
+async function retrieve(env, query, topK = CONTEXT_K, rerankQuery = query, applyMinScore = true) {
   const liveHits = await liveLookup(query).catch((e) => { console.warn("live lookup failed", e); return []; });
-  if (liveHits.length >= topK) return liveHits.slice(0, topK); // exact matches alone fill the request -- skip embed/search/rerank
+  // App hits (e.g. "ANSYS") often have a real docs page covering the same software in far more
+  // depth -- rerank them against that page's chunks instead of pinning them in unconditionally,
+  // so the more relevant one wins rather than the module-list card always shadowing the page.
+  // Glossary hits have no competing page, so they keep the guaranteed top slot.
+  const appHits = liveHits.filter((h) => h.section === "Software");
+  const pinnedHits = liveHits.filter((h) => h.section !== "Software");
+  if (pinnedHits.length >= topK) return pinnedHits.slice(0, topK); // exact matches alone fill the request -- skip embed/search/rerank
 
   const vector = await embed(env, query);
   const result = await env.VECTORIZE.query(vector, {
@@ -154,7 +161,10 @@ async function retrieve(env, query, topK = CONTEXT_K, rerankQuery = query) {
     returnValues: false,
     returnMetadata: "all",
   });
-  const matches = result.matches ?? [];
+  const matches = [
+    ...(result.matches ?? []),
+    ...appHits.map((h) => ({ metadata: { title: h.title, heading: h.heading, url: h.url, path: h.path, section: h.section, text: h.text }, score: 1 })),
+  ];
 
   // Second stage: cross-encoder rerank.
   const rerank = async (q) => {
@@ -169,7 +179,7 @@ async function retrieve(env, query, topK = CONTEXT_K, rerankQuery = query) {
         .sort((a, b) => b.rerankScore - a.rerankScore);
     } catch (e) {
       console.warn("rerank failed, falling back to vector order", e);
-      return matches.map((m) => ({ ...m, rerankScore: null }));
+      return matches.map((m) => ({ ...m, rerankScore: m.score }));
     }
   };
 
@@ -182,7 +192,7 @@ async function retrieve(env, query, topK = CONTEXT_K, rerankQuery = query) {
   }
 
   const vectorSources = ranked
-    .filter((m) => m.rerankScore == null || m.rerankScore >= MIN_RERANK_SCORE) // drop marginal chunks rather than padding out to topK; null = rerank failed, fall back to vector order untouched
+    .filter((m) => !applyMinScore || m.rerankScore >= MIN_RERANK_SCORE) // drop marginal chunks rather than padding out to topK; skipped for /api/search, which is raw retrieval (see eval.mjs's threshold sweep)
     .map((m) => ({
       title: m.metadata?.title,
       heading: m.metadata?.heading,
@@ -195,8 +205,9 @@ async function retrieve(env, query, topK = CONTEXT_K, rerankQuery = query) {
       rerankScore: m.rerankScore,
     }));
 
-  // Live hits first: rerankScore 1 sorts them ahead and clears MIN_RERANK_SCORE outright.
-  return [...liveHits, ...vectorSources].slice(0, topK);
+  // Glossary hits first: rerankScore 1 sorts them ahead and clears MIN_RERANK_SCORE outright.
+  // App hits are already folded into vectorSources above, ranked on merit against their own page.
+  return [...pinnedHits, ...vectorSources].slice(0, topK);
 }
 
 function buildContext(sources) {
@@ -217,20 +228,22 @@ async function fetchStatus() {
     const data = await res.json();
     if (!data?.status || data.status.indicator === "none") return null;
 
+    // Each entry keeps its raw `name` alongside the formatted `text` line so
+    // relevantStatusQuote() can match against the question without re-parsing.
     const incidents = (data.incidents || [])
       .filter((i) => i.status !== "resolved" && i.status !== "postmortem")
       .map((i) => {
         const latest = i.incident_updates?.[0];
-        return `- ${i.name} [${i.status}, impact: ${i.impact}]${latest ? `: ${latest.body}` : ""}`;
+        return { name: i.name, text: `- ${i.name} [${i.status}, impact: ${i.impact}]${latest ? `: ${latest.body}` : ""}` };
       });
 
     const maintenances = (data.scheduled_maintenances || [])
       .filter((m) => m.status === "in_progress" || m.status === "scheduled")
-      .map((m) => `- ${m.name} [${m.status}]: ${m.scheduled_for} → ${m.scheduled_until}`);
+      .map((m) => ({ name: m.name, text: `- ${m.name} [${m.status}]: ${m.scheduled_for} → ${m.scheduled_until}` }));
 
     const affected = (data.components || [])
       .filter((c) => c.status && c.status !== "operational")
-      .map((c) => `- ${c.name}: ${c.status.replace(/_/g, " ")}${c.description ? ` — ${c.description}` : ""}`);
+      .map((c) => ({ name: c.name, text: `- ${c.name}: ${c.status.replace(/_/g, " ")}${c.description ? ` — ${c.description}` : ""}` }));
 
     return { indicator: data.status.indicator, description: data.status.description, incidents, maintenances, affected };
   } catch (e) {
@@ -239,17 +252,40 @@ async function fetchStatus() {
   }
 }
 
+// A truthy `status` (indicator !== "none") doesn't guarantee an open incident
+// or scheduled maintenance entry -- a component can be manually marked
+// degraded on Statuspage with neither. Returns null in that case rather than
+// a quote string, so callers don't interpolate `undefined` into user text.
+//
+// Used only on the "docs found nothing" path, where there's no LLM call to
+// judge relevance itself — so this does the matching heuristically (name or
+// significant-word overlap with the question) rather than dumping the full
+// incident/maintenance description regardless of topic. No match -> null,
+// so the caller can fall back to a generic "there's an unrelated outage"
+// mention instead of quoting something that may have nothing to do with
+// what was asked.
+function relevantStatusQuote(status, question) {
+  const primary = status?.incidents[0] || status?.maintenances[0];
+  if (!primary) return null;
+  const q = question.toLowerCase();
+  const names = [primary.name, ...(status.affected || []).map((a) => a.name)];
+  const related = names.some(
+    (name) => q.includes(name.toLowerCase()) || name.toLowerCase().split(/\s+/).some((w) => w.length > 3 && q.includes(w))
+  );
+  return related ? primary.text : null;
+}
+
 function buildStatusBlock(status) {
   if (!status) return "";
   const parts = [`Indicator (background only, do not quote this line — use the incident detail below instead): ${status.description}`];
-  if (status.incidents.length) parts.push("Incident detail (quote this part if relevant):\n" + status.incidents.join("\n"));
-  if (status.affected.length) parts.push("Affected components (for matching to the user's question only — do not list them all in your reply):\n" + status.affected.join("\n"));
-  if (status.maintenances.length) parts.push("Scheduled maintenance:\n" + status.maintenances.join("\n"));
+  if (status.incidents.length) parts.push("Incident detail (quote this part if relevant):\n" + status.incidents.map((i) => i.text).join("\n"));
+  if (status.affected.length) parts.push("Affected components (for matching to the user's question only — do not list them all in your reply):\n" + status.affected.map((a) => a.text).join("\n"));
+  if (status.maintenances.length) parts.push("Scheduled maintenance:\n" + status.maintenances.map((m) => m.text).join("\n"));
   const severe = status.indicator === "major" || status.indicator === "critical";
   const directive = severe
-    ? "This is a major/critical outage. If the user's question could plausibly be affected by it (access, jobs, storage, transfers, portals — most things, during an outage this size), your ENTIRE reply should be: which specific component(s) from the list below match their question, quoting the relevant part of the incident detail (not the indicator line, not the full component list) — then \"See https://status.nesi.org.nz for details.\" Skip doc-based troubleshooting entirely; it won't help until the outage is resolved."
-    : "Only mention this if a listed affected component is what the user's specific action actually depends on — not merely in the same general area (e.g. a tape/long-term-storage incident does not affect a live transfer into project storage). When in doubt, leave it out. If you do mention it, quote the relevant incident-detail line (not the indicator line) in one sentence, then point to https://status.nesi.org.nz for details.";
-  return "\n\n=== LIVE SERVICE STATUS (not a documentation source — never cite with [n]) ===\n" + directive + "\n\n" + parts.join("\n\n");
+    ? "This is a major/critical outage. If the user's question could plausibly be affected by it (access, jobs, storage, transfers, portals — most things, during an outage this size), your ENTIRE reply should be: which specific component(s) from the list below match their question, quoting the relevant part of the incident detail (not the indicator line, not the full component list) — then \"See [status.nesi.org.nz](https://status.nesi.org.nz) for details.\" Skip doc-based troubleshooting entirely; it won't help until the outage is resolved."
+    : "Mention this if the user's question is about, or names, a component listed as affected below — even a general how-to question about that component, not just \"is it down\"-style questions. Only skip it when the affected component is in a clearly different area from what they're asking about (e.g. a tape/long-term-storage incident does not affect a live transfer into project storage). If you mention it, quote the relevant incident-detail line (not the indicator line) in one sentence, then point to [status.nesi.org.nz](https://status.nesi.org.nz) for details.";
+  return "\n\n=== LIVE SERVICE STATUS ===\n" + directive + "\n\n" + parts.join("\n\n");
 }
 
 /* ---------------------------- /api/chat --------------------------- */
@@ -271,10 +307,12 @@ async function handleChat(request, env) {
   const sse = (obj) => encoder.encode(`data: ${JSON.stringify(obj)}\n\n`);
 
   if (!confident) {
-    const quote = status?.incidents[0] || status?.maintenances[0];
-    const fallback = status
-      ? `I couldn't find anything in the NeSI support docs that answers that — but there's a live status update that might explain it: "${quote}". Check https://status.nesi.org.nz for details, or contact support@nesi.org.nz if this doesn't look related.`
-      : "I couldn't find anything in the NeSI support docs that answers that. Try rephrasing with the specific service or tool name (e.g. Slurm, JupyterHub, Globus), or contact support@nesi.org.nz.";
+    const quote = relevantStatusQuote(status, retrievalQuery);
+    const fallback = quote
+      ? `I couldn't find anything in the NeSI support docs that answers that — but there's a live status update that might explain it: "${quote}". Check [status.nesi.org.nz](https://status.nesi.org.nz) for details, or contact [support@nesi.org.nz](mailto:support@nesi.org.nz) if this doesn't look related.`
+      : status
+        ? `I couldn't find anything in the NeSI support docs that answers that. There's also a live status update for a ${status.indicator} outage or maintenance right now, though it doesn't look related — check [status.nesi.org.nz](https://status.nesi.org.nz) if you think otherwise, or contact [support@nesi.org.nz](mailto:support@nesi.org.nz).`
+        : "I couldn't find anything in the NeSI support docs that answers that. Try rephrasing with the specific service or tool name (e.g. Slurm, JupyterHub, Globus), or contact [support@nesi.org.nz](mailto:support@nesi.org.nz).";
     const body = new ReadableStream({
       start(controller) {
         controller.enqueue(sse({ type: "sources", sources: [] }));
@@ -335,7 +373,7 @@ async function handleSearch(request, env) {
   if (!checkAuth(request, env)) return json({ error: "unauthorized" }, 401);
   const { query, topK = 8 } = await request.json();
   if (!query?.trim()) return json({ error: "query required" }, 400);
-  const results = await retrieve(env, query, Math.min(topK, 20));
+  const results = await retrieve(env, query, Math.min(topK, 20), query, false);
   return json({ results });
 }
 
@@ -435,8 +473,12 @@ async function callTool(env, name, args) {
   if (name === "ask_nesi_docs") {
     const [sources, status] = await Promise.all([retrieve(env, args.question), fetchStatus()]);
     if (!isConfidentResponse(sources, MIN_RERANK_SCORE)) {
-      const quote = status?.incidents[0] || status?.maintenances[0];
-      const note = status ? ` There is a live status update that might be relevant: "${quote}" (see status.nesi.org.nz).` : "";
+      const quote = relevantStatusQuote(status, args.question);
+      const note = quote
+        ? ` There is a live status update that might be relevant: "${quote}" (see status.nesi.org.nz).`
+        : status
+          ? ` Note: there is an unrelated live status update for a ${status.indicator} outage or maintenance right now — see status.nesi.org.nz if you think it could be relevant after all.`
+          : "";
       return { content: [{ type: "text", text: `The NeSI support docs don't appear to cover this. Contact support@nesi.org.nz.${note}` }] };
     }
     const res = await env.AI.run(CHAT_MODEL, {
@@ -461,9 +503,9 @@ async function callTool(env, name, args) {
     const status = await fetchStatus();
     const text = status
       ? `Status: ${status.description}\n\n` +
-        (status.incidents.length ? `Active incidents:\n${status.incidents.join("\n")}\n\n` : "") +
-        (status.affected.length ? `Affected services:\n${status.affected.join("\n")}\n\n` : "") +
-        (status.maintenances.length ? `Scheduled maintenance:\n${status.maintenances.join("\n")}\n\n` : "")
+        (status.incidents.length ? `Active incidents:\n${status.incidents.map((i) => i.text).join("\n")}\n\n` : "") +
+        (status.affected.length ? `Affected services:\n${status.affected.map((a) => a.text).join("\n")}\n\n` : "") +
+        (status.maintenances.length ? `Scheduled maintenance:\n${status.maintenances.map((m) => m.text).join("\n")}\n\n` : "")
       : "All systems operational — no active incidents or scheduled maintenance reported at status.nesi.org.nz.";
     return { content: [{ type: "text", text: text.trim() }] };
   }
