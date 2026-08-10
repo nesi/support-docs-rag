@@ -1,4 +1,4 @@
-import { score, report } from "./eval.mjs";
+import { score, report } from "./eval-search.mjs";
 import { isConfidentResponse } from "../src/confidence.mjs";
 
 const rows = [

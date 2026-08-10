@@ -28,16 +28,16 @@
 
 import { liveLookup } from "./liveData.mjs";
 import { isConfidentResponse } from "./confidence.mjs";
+import { isValidDocPath } from "./docPath.mjs";
 import { realignSbatchBlocks, fillMissingModuleVersions, createSbatchStreamFilter } from "./slurmFormat.mjs";
 
 const EMBED_MODEL = "@cf/baai/bge-m3";
 const RERANK_MODEL = "@cf/baai/bge-reranker-base";
-// const CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-const CHAT_MODEL = "@cf/ibm-granite/granite-4.0-h-micro";
+const CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 const RETRIEVE_K = 20;      // wide net from Vectorize
 const CONTEXT_K = 6;        // chunks handed to the LLM after reranking
-const MIN_RERANK_SCORE = 0.4; // below this a chunk isn't shown as a source at all, and below this for the best chunk => "not in the docs" — see scripts/eval.mjs's threshold sweep for why 0.4
+const MIN_RERANK_SCORE = 0.4; // below this a chunk isn't shown as a source at all, and below this for the best chunk => "not in the docs" — see scripts/eval-search.mjs's threshold sweep for why 0.4
 
 // The docs site embeds a live status widget (status.nesi.org.nz) that the
 // static ingest pipeline can't capture — it's dynamic, not a doc page. This
@@ -193,7 +193,7 @@ async function retrieve(env, query, topK = CONTEXT_K, rerankQuery = query, apply
   }
 
   const vectorSources = ranked
-    .filter((m) => !applyMinScore || m.rerankScore >= MIN_RERANK_SCORE) // drop marginal chunks rather than padding out to topK; skipped for /api/search, which is raw retrieval (see eval.mjs's threshold sweep)
+    .filter((m) => !applyMinScore || m.rerankScore >= MIN_RERANK_SCORE) // drop marginal chunks rather than padding out to topK; skipped for /api/search, which is raw retrieval (see eval-search.mjs's threshold sweep)
     .map((m) => ({
       title: m.metadata?.title,
       heading: m.metadata?.heading,
@@ -356,7 +356,10 @@ async function handleChat(request, env) {
           if (payload === "[DONE]") continue;
           try {
             const parsed = JSON.parse(payload);
-            if (parsed.response) await sbatchFilter.push(parsed.response);
+            // Older Workers AI models (llama) emit {response}; newer OpenAI-compatible
+            // models (granite) emit {choices:[{delta:{content}}]} chunks instead.
+            const chunk = parsed.response ?? parsed.choices?.[0]?.delta?.content;
+            if (chunk) await sbatchFilter.push(chunk);
           } catch { /* partial line */ }
         }
       }
@@ -490,12 +493,15 @@ async function callTool(env, name, args) {
       max_tokens: 1024,
     });
     const cites = sources.map((s, i) => `[${i + 1}] ${s.title}: ${s.url}`).join("\n");
-    const answer = realignSbatchBlocks(await fillMissingModuleVersions(res.response));
+    // Older Workers AI models (llama) return {response}; newer OpenAI-compatible
+    // models (granite, mistral) return {choices:[{message:{content}}]} instead.
+    const text = res.response ?? res.choices?.[0]?.message?.content;
+    const answer = realignSbatchBlocks(await fillMissingModuleVersions(text));
     return { content: [{ type: "text", text: `${answer}\n\nSources:\n${cites}` }] };
   }
   if (name === "read_nesi_doc") {
     const path = String(args.path || "");
-    if (!/^[\w\-/.]+\.md$/.test(path) || path.includes("..")) throw new Error("invalid path");
+    if (!isValidDocPath(path)) throw new Error("invalid path");
     const raw = await fetch(`https://raw.githubusercontent.com/nesi/support-docs/main/docs/${path}`);
     if (!raw.ok) throw new Error(`page not found: ${path}`);
     return { content: [{ type: "text", text: await raw.text() }] };

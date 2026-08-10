@@ -13,3 +13,18 @@ rag-ingest:
   script:
     - git clone --depth 1 https://github.com/nesi/support-docs.git support-docs # public, no auth needed
     - bash scripts/ingest_local.sh support-docs/docs # same wrapper used locally
+
+# Pure-logic unit tests (scoring maths, path validation, chunk ids, answer
+# formatting) -- no Worker, no network, no credentials, so these run on every
+# push. Deliberately separate from rag-ingest: this shouldn't wait on or
+# trigger a re-ingest, and rag-ingest shouldn't wait on or trigger this.
+unit-tests:
+  image: node:22-slim
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - node scripts/eval-search.test.mjs
+    - node scripts/eval-read.test.mjs
+    - node scripts/eval-chunk.test.mjs
+    - node scripts/eval-format.test.mjs
