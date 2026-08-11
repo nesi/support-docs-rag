@@ -1,0 +1,48 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run all tests",
+      "type": "shell",
+      "command": "for f in scripts/eval-search.test.mjs scripts/eval-read.test.mjs scripts/eval-chunk.test.mjs scripts/eval-format.test.mjs; do echo \"== $f ==\"; node \"$f\" || exit 1; done",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "Test: eval-search",
+      "type": "shell",
+      "command": "node scripts/eval-search.test.mjs",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: eval-read",
+      "type": "shell",
+      "command": "node scripts/eval-read.test.mjs",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: eval-chunk",
+      "type": "shell",
+      "command": "node scripts/eval-chunk.test.mjs",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: eval-format",
+      "type": "shell",
+      "command": "node scripts/eval-format.test.mjs",
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}
