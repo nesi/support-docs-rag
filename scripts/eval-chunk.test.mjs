@@ -4,7 +4,7 @@
 // eval-search.mjs/eval-ask.mjs to match expected pages against retrieved
 // ones, so a regression here would silently corrupt eval scoring too.
 
-import { chunkId, pathToUrl } from "./chunker.mjs";
+import { chunkId, pathToUrl, parseFrontmatter } from "./chunker.mjs";
 
 let fail = 0;
 const check = (label, got, want) => {
@@ -67,6 +67,29 @@ check(
   "custom siteUrl is respected",
   pathToUrl("foo.md", "https://staging.example.com/"),
   "https://staging.example.com/foo/"
+);
+
+/* ------------------------------ parseFrontmatter (search:) ------------------------------ */
+
+check(
+  "search: exclude sets searchExclude",
+  parseFrontmatter("---\ntitle: Contributing\nsearch:\n  exclude: true\ndescription: how to contribute\n---\nbody").meta.searchExclude,
+  true
+);
+check(
+  "search: boost sets searchBoost",
+  parseFrontmatter("---\nsearch:\n  boost: 0.1\n---\nbody").meta.searchBoost,
+  0.1
+);
+check(
+  "search: boost > 1 parses as a plain float",
+  parseFrontmatter("---\nsearch:\n  boost: 10\n---\nbody").meta.searchBoost,
+  10
+);
+check(
+  "no search: block leaves both fields unset",
+  parseFrontmatter("---\ndescription: plain page\n---\nbody").meta.searchExclude,
+  undefined
 );
 
 console.log(fail === 0 ? "eval-chunk OK\n" : `${fail} failures\n`);

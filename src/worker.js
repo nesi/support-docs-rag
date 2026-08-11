@@ -167,7 +167,12 @@ async function retrieve(env, query, topK = CONTEXT_K, rerankQuery = query, apply
     ...appHits.map((h) => ({ metadata: { title: h.title, heading: h.heading, url: h.url, path: h.path, section: h.section, text: h.text }, score: 1 })),
   ];
 
-  // Second stage: cross-encoder rerank.
+  // Second stage: cross-encoder rerank, adjusted by the page's `search: boost`
+  // frontmatter (see scripts/chunker.mjs). sqrt rather than a straight multiply
+  // or a hard clamp: it pulls extreme values (boost: 10, boost: 0.01) toward 1
+  // while still preserving direction, so one hand-tuned outlier page can't
+  // single-handedly swing a chunk across MIN_RERANK_SCORE.
+  const boostFactor = (m) => Math.sqrt(m.metadata?.boost ?? 1);
   const rerank = async (q) => {
     try {
       const rr = await env.AI.run(RERANK_MODEL, {
@@ -176,11 +181,11 @@ async function retrieve(env, query, topK = CONTEXT_K, rerankQuery = query, apply
       });
       const scores = rr.response ?? rr; // [{id, score}] where id = index into contexts
       return scores
-        .map((s) => ({ ...matches[s.id], rerankScore: s.score }))
+        .map((s) => ({ ...matches[s.id], rerankScore: s.score * boostFactor(matches[s.id]) }))
         .sort((a, b) => b.rerankScore - a.rerankScore);
     } catch (e) {
       console.warn("rerank failed, falling back to vector order", e);
-      return matches.map((m) => ({ ...m, rerankScore: m.score }));
+      return matches.map((m) => ({ ...m, rerankScore: m.score * boostFactor(m) }));
     }
   };
 
