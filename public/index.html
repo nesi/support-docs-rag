@@ -74,7 +74,9 @@
   </div>
   <div class="hint">Answers come only from the official support docs, with citations. Verify commands before running on shared systems.</div>
 </div></footer>
-<script>
+<script type="module">
+import { renderMarkdown } from "./render.mjs";
+
 const chat = document.getElementById("chat");
 const input = document.getElementById("input");
 const sendBtn = document.getElementById("send");
@@ -88,26 +90,6 @@ input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey)
 input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; });
 
 function el(cls, parent) { const d = document.createElement("div"); d.className = cls; parent.appendChild(d); return d; }
-
-// Tiny markdown renderer: escapes HTML first, then code blocks, inline code,
-// bold, links, [n] citations, paragraphs. Enough for model output.
-function render(md, sources) {
-  let h = md.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const blocks = [];
-  h = h.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => { blocks.push(code); return `\x00${blocks.length - 1}\x00`; });
-  h = h.replace(/`([^`]+)`/g, "<code>$1</code>")
-       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-       .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-       .replace(/\[(\d+)\]/g, (_, n) => {
-         const s = sources && sources[n - 1];
-         return s ? `<sup class="cite" onclick="window.open('${s.url}','_blank')" title="${(s.title||"").replace(/"/g,"&quot;")}">[${n}]</sup>` : `[${n}]`;
-       })
-       .replace(/^[-*] (.+)$/gm, "<li>$1</li>")
-       .replace(/(<li>[\s\S]*?<\/li>)(?!\s*<li>)/g, "<ul>$1</ul>");
-  h = h.split(/\n{2,}/).map((p) => /^<(ul|pre)/.test(p.trim()) ? p : `<p>${p.replace(/\n/g, "<br>")}</p>`).join("");
-  h = h.replace(/\x00(\d+)\x00/g, (_, i) => `<pre><code>${blocks[i]}</code></pre>`);
-  return h;
-}
 
 async function send() {
   const question = input.value.trim();
@@ -144,7 +126,7 @@ async function send() {
         if (!line.startsWith("data: ")) continue;
         const ev = JSON.parse(line.slice(6));
         if (ev.type === "sources") sources = ev.sources;
-        if (ev.type === "token") { answer += ev.text; bubble.innerHTML = render(answer, sources); chat.scrollIntoView(false); }
+        if (ev.type === "token") { answer += ev.text; bubble.innerHTML = renderMarkdown(answer, sources); chat.scrollIntoView(false); }
       }
     }
     if (sources.length) {

@@ -28,18 +28,18 @@
  * gate is doing its cost-saving job), not for judging end-user-facing safety.
  *
  * Usage:
- *   RAG_URL=https://nesi-docs-rag.<subdomain>.workers.dev node scripts/eval.mjs
- *   node scripts/eval.mjs --local              # against `npx wrangler dev`
- *   node scripts/eval.mjs --threshold 0.25     # score at a different cutoff
- *   node scripts/eval.mjs --verbose            # list every failing case
+ *   RAG_URL=https://nesi-docs-rag.<subdomain>.workers.dev node scripts/eval-search.mjs
+ *   node scripts/eval-search.mjs --local              # against `npx wrangler dev`
+ *   node scripts/eval-search.mjs --threshold 0.25     # score at a different cutoff
+ *   node scripts/eval-search.mjs --verbose            # list every failing case
  *
  * Set API_KEY if the Worker has the shared-secret auth enabled.
  */
 
-import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pathToUrl } from "./chunker.mjs";
+import { loadCases, mapLimit, pageOf, resolveUrl } from "./lib-eval.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -75,29 +75,11 @@ function parseArgs(argv) {
       process.exit(2);
     }
   }
-  if (!opts.url) {
-    console.error("No Worker URL. Pass --url <base>, --local, or set RAG_URL.");
-    process.exit(2);
-  }
-  opts.url = opts.url.replace(/\/$/, "");
+  opts.url = resolveUrl(opts.url);
   return opts;
 }
 
 /* ------------------------------- the run ------------------------------- */
-
-function loadCases(file) {
-  return readFileSync(file, "utf8")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith("//"))
-    .map((l, i) => {
-      try {
-        return JSON.parse(l);
-      } catch (e) {
-        throw new Error(`${file}: bad JSON on line ${i + 1}: ${e.message}`);
-      }
-    });
-}
 
 async function search(opts, query) {
   const headers = { "Content-Type": "application/json" };
@@ -113,17 +95,6 @@ async function search(opts, query) {
   }
 }
 
-/**
- * Strip the #heading anchor the chunker appends, and lowercase, so URLs
- * compare page-to-page regardless of case. Necessary because chunk citations
- * now carry the site's real canonical URL (see ingest.mjs's redirect-follow),
- * which can differ in case from a local filename's pathToUrl() output —
- * e.g. local Automatic_cleaning_of_nobackup.md vs the site's
- * Automatic_Cleaning_of_Nobackup. Same page either way; a case-sensitive
- * compare here would misreport a correct top-1 hit as a total miss.
- */
-const pageOf = (url) => String(url || "").split("#")[0].toLowerCase();
-
 async function runCase(opts, c) {
   const results = await search(opts, c.question);
   const expected = new Set((c.paths || []).map((p) => pageOf(pathToUrl(p))));
@@ -137,21 +108,6 @@ async function runCase(opts, c) {
     rank: rank === -1 ? null : rank + 1, // 1-based, null = not retrieved at all
     top3: results.slice(0, 3).map((r) => `${pageOf(r.url)} (${r.rerankScore?.toFixed(3)})`),
   };
-}
-
-/** Run with a small concurrency cap — Workers AI rate-limits bursts. */
-async function mapLimit(items, limit, fn) {
-  const out = new Array(items.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (next < items.length) {
-        const i = next++;
-        out[i] = await fn(items[i], i);
-      }
-    })
-  );
-  return out;
 }
 
 /* ------------------------------- scoring ------------------------------- */
