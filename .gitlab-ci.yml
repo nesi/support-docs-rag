@@ -1,6 +1,8 @@
-# Refreshes the nesi-docs Vectorize index. Triggered externally by
-# support-docs's GitHub Actions on every push, not by pushes here -- code-only
-# changes to this repo shouldn't force a re-ingest on their own.
+# Refreshes the nesi-docs Vectorize index. Runs on a pipeline schedule
+# (CI/CD > Schedules), by hand from the web UI, or via an external trigger
+# (e.g. support-docs's GitHub Actions) -- not on pushes here, since code-only
+# changes to this repo shouldn't force a re-ingest. Ingest is incremental
+# (content hashes), so a run with no doc changes embeds nothing.
 #
 # Needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN as GitLab CI/CD
 # variables on this project (Settings > CI/CD > Variables) -- see CLAUDE.md.
@@ -10,6 +12,8 @@ rag-ingest:
     - if: '$CI_PIPELINE_SOURCE == "trigger"'
     - if: '$CI_PIPELINE_SOURCE == "web"'
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends git ca-certificates # slim image has no git
   script:
     - git clone --depth 1 https://github.com/nesi/support-docs.git support-docs # public, no auth needed
     - bash scripts/ingest_local.sh support-docs/docs # same wrapper used locally
@@ -28,3 +32,4 @@ unit-tests:
     - node scripts/eval-read.test.mjs
     - node scripts/eval-chunk.test.mjs
     - node scripts/eval-format.test.mjs
+    - node scripts/eval-ingest.test.mjs

@@ -20,7 +20,7 @@ Five-stage retrieval (`retrieve()` in worker.js):
 
 Ingest pipeline (offline, `scripts/`), reading only the local `support-docs` checkout — no dependency on a deployed site. Only prose docs are embedded; module-list.json/glossary content is never ingested at all, only looked up live (see above):
 - `chunker.mjs` — markdown-aware. Splits on `##`/`###` headings, merges sections `< MIN_CHARS=400`, splits `> MAX_CHARS=3200`, targets `TARGET_CHARS=2200` (~450 tokens). `embedText` prepends breadcrumb + frontmatter description + tags so chunks carry context into vector space. Stable ids `path#chunkIndex`, or `sha256(path)[0:12]-<tail>#chunkIndex` when the path pushes the id past Vectorize's 64-byte limit (`chunkId()`). Ids must stay deterministic — that's what makes re-ingest overwrite in place. `Software/Available_Applications/*` pages' `applications[...]` macros are left for the generic Jinja strip to drop — live lookup covers that data instead, not reconstructed per page.
-- `ingest.mjs` — chunks every file under the given docs root, batches by an estimated token budget (not a fixed count — Workers AI's context cap is a sum across the whole embed batch) with a reactive halving retry as the real safety net, upserts NDJSON to Vectorize. Re-runnable: stable ids overwrite in place. `--dry-run` runs the full chunk pass without calling Cloudflare.
+- `ingest.mjs` — chunks every file under the given docs root, batches by an estimated token budget (not a fixed count — Workers AI's context cap is a sum across the whole embed batch) with a reactive halving retry as the real safety net, upserts NDJSON to Vectorize. Incremental: each chunk's `metadata.hash` digests embed model + capped `embedText` + metadata; `planIngest()` (`ingestPlan.mjs`, pure, tested in `eval-ingest.test.mjs`) diffs against hashes in the index, embeds only new/changed chunks, deletes orphaned ids. Refuses to delete >50% of the index unless `--allow-mass-delete`. `--full` re-embeds all. `--dry-run` runs the full chunk pass without calling Cloudflare.
 
 `src/appData.mjs` / `src/glossaryData.mjs` — pure rendering/parsing for module-list.json apps and glossary jargon, no `node:fs`. Live in `src/`, not `scripts/`, because only `src/liveData.mjs` uses them — nothing in the offline ingest pipeline touches module-list.json/glossary data anymore.
 
@@ -39,7 +39,7 @@ npx wrangler vectorize create nesi-docs --dimensions=1024 --metric=cosine
 # (the /ai/run REST endpoint requires both) and Vectorize Edit (upsert is a write).
 export CLOUDFLARE_ACCOUNT_ID=...
 export CLOUDFLARE_API_TOKEN=...
-node scripts/ingest.mjs /path/to/support-docs/docs [--index nesi-docs] [--dry-run]
+node scripts/ingest.mjs /path/to/support-docs/docs [--index nesi-docs] [--dry-run] [--full] [--allow-mass-delete]
 
 # Inspect chunking without embedding
 node scripts/chunker.mjs /path/to/support-docs/docs --stats
@@ -48,7 +48,7 @@ node scripts/chunker.mjs /path/to/support-docs/docs --stats
 npx wrangler dev
 ```
 
-Clean rebuild (after big doc reorgs leave stale vectors): `vectorize delete` → `vectorize create` → re-ingest.
+Stale vectors are deleted on each ingest, so a clean rebuild (`vectorize delete` → `vectorize create` → re-ingest) is only needed for index-level changes (dimensions, metric).
 
 ## Config & tuning
 
