@@ -61,16 +61,39 @@ class CfApiError extends Error {
   }
 }
 
+// Retry transient failures: network errors, 429, 5xx (one scheduled run hit
+// a one-off 504 on /list). Every call here is idempotent — upsert overwrites,
+// delete of a missing id is a no-op — so retrying is safe.
+const RETRIES = 3;
+const RETRY_BASE_MS = 2000;
+
 async function cfFetch(path, init) {
-  const res = await fetch(`${API}${path}`, {
-    ...init,
-    headers: { Authorization: `Bearer ${TOKEN}`, ...init?.headers },
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok || body.success === false) {
-    throw new CfApiError(path, res.status, body.errors || [body]);
+  for (let attempt = 0; ; attempt++) {
+    let res;
+    try {
+      res = await fetch(`${API}${path}`, {
+        ...init,
+        headers: { Authorization: `Bearer ${TOKEN}`, ...init?.headers },
+      });
+    } catch (e) {
+      if (attempt >= RETRIES) throw e;
+      await retryWait(path, attempt, e.message);
+      continue;
+    }
+    const body = await res.json().catch(() => ({}));
+    if (res.ok && body.success !== false) return body.result ?? body;
+    const transient = res.status === 429 || res.status >= 500;
+    if (!transient || attempt >= RETRIES) {
+      throw new CfApiError(path, res.status, body.errors || [body]);
+    }
+    await retryWait(path, attempt, `HTTP ${res.status}`);
   }
-  return body.result ?? body;
+}
+
+function retryWait(path, attempt, reason) {
+  const ms = RETRY_BASE_MS * 2 ** attempt; // 2s, 4s, 8s
+  console.warn(`\n${path}: ${reason}, retry ${attempt + 1}/${RETRIES} in ${ms / 1000}s`);
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 async function embedBatch(texts) {
