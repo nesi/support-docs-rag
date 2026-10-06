@@ -1,9 +1,11 @@
-// Tests for the two answer-formatting passes applied to model output:
-// Slurm script reflow (src/slurmFormat.mjs) and markdown -> HTML (public/render.mjs).
-// Both are pure string transforms — no network, no Worker needed.
+// Tests for the answer-formatting passes applied to model output:
+// Slurm script reflow (src/slurmFormat.mjs), markdown -> HTML (public/render.mjs),
+// and citation normalisation (src/citations.mjs).
+// All are pure string transforms — no network, no Worker needed.
 
 import { realignSbatchBlocks, createSbatchStreamFilter } from "../src/slurmFormat.mjs";
 import { renderMarkdown } from "../public/render.mjs";
+import { normalizeCitations, cleanAnswer, createCitationStreamFilter } from "../src/citations.mjs";
 
 let fail = 0;
 const check = (label, got, want) => {
@@ -106,6 +108,25 @@ check(
   renderMarkdown("para one\nline two\n\npara two"),
   "<p>para one<br>line two</p><p>para two</p>"
 );
+
+// Citation normalisation (src/citations.mjs)
+check("citation with line range", normalizeCitations("Use it【1†L13-L16】."), "Use it[1].");
+check("chained citations", normalizeCitations("x【1†L1-L2】【4†source】"), "x[1][4]");
+check("bare full-width citation", normalizeCitations("x【2】"), "x[2]");
+check("plain [n] untouched", normalizeCitations("x [3] and 【note】"), "x [3] and 【note】");
+check("cleanAnswer trims leading blank lines", cleanAnswer("\n\nAnswer【1†L1】"), "Answer[1]");
+
+async function streamThrough(chunks) {
+  let out = "";
+  const f = createCitationStreamFilter((t) => { out += t; });
+  for (const c of chunks) await f.push(c);
+  await f.flush();
+  return out;
+}
+check("stream: marker split across chunks", await streamThrough(["Run it【", "1†L1", "3-L16】 then", " 【4】."]), "Run it[1] then [4].");
+check("stream: leading whitespace dropped", await streamThrough(["\n\n", "\n", "Answer"]), "Answer");
+check("stream: unclosed 【 flushed, not swallowed", await streamThrough(["a 【", "b".repeat(50), " c"]), "a 【" + "b".repeat(50) + " c");
+check("stream: unclosed 【 at end flushed", await streamThrough(["end 【1"]), "end 【1");
 
 console.log(fail === 0 ? "eval-format OK\n" : `${fail} failures\n`);
 process.exit(fail === 0 ? 0 : 1);
