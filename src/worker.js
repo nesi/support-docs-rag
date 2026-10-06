@@ -30,11 +30,18 @@ import { liveLookup } from "./liveData.mjs";
 import { isConfidentResponse } from "./confidence.mjs";
 import { isValidDocPath } from "./docPath.mjs";
 import { realignSbatchBlocks, fillMissingModuleVersions, createSbatchStreamFilter } from "./slurmFormat.mjs";
+import { cleanAnswer, createCitationStreamFilter } from "./citations.mjs";
 
 const EMBED_MODEL = "@cf/baai/bge-m3";
 const RERANK_MODEL = "@cf/baai/bge-reranker-base";
 // const CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const CHAT_MODEL = "@cf/nvidia/nemotron-3-120b-a12b";
+// Covers hidden reasoning plus the answer. Nemotron's reasoning counts toward
+// this; at 1024 it sometimes used the whole budget and returned no answer.
+// Billed on tokens used, so a higher cap costs nothing on typical answers.
+const CHAT_MAX_TOKENS = 4096;
+// Shown when the model returns no visible text (e.g. ran out of tokens).
+const EMPTY_ANSWER = "Sorry, I couldn't produce an answer that time. Please try again, or contact [support@nesi.org.nz](mailto:support@nesi.org.nz).";
 
 const RETRIEVE_K = 20;      // wide net from Vectorize
 const CONTEXT_K = 6;        // chunks handed to the LLM after reranking
@@ -52,7 +59,7 @@ const SYSTEM_PROMPT = `You are the REANNZ HPC support assistant. You answer ques
 
 Rules — follow all of them strictly:
 1. Answer ONLY from the documentation excerpts provided below. Never use outside knowledge about HPC, Slurm, or REANNZ.
-2. Cite sources inline with bracketed numbers like [1] or [2][3] that refer to the numbered excerpts. Every factual claim needs a citation.
+2. Cite sources inline with bracketed numbers like [1] or [2][3] that refer to the numbered excerpts. Every factual claim needs a citation. Use only this plain [n] form — never 【n】, 【n†...】, line ranges, or any other citation style.
 3. If the excerpts do not contain the answer, say so plainly and suggest what to search the docs for or to contact [support@nesi.org.nz](mailto:support@nesi.org.nz). Do not guess.
 4. Preserve exact command syntax, module names, paths and Slurm directives from the excerpts - put them in code blocks.
 5. Be concise: lead with the answer or command, no preamble ("Let's walk through some steps", "I'd be happy to help") and no closing filler ("If none of these steps work...", "If you're still having trouble..."). Give only the steps that apply to this question — don't enumerate every possible cause. Prefer a couple of sentences or short bullets over multi-paragraph explanations. Give one script or one command, not several variants side by side — if the excerpts support multiple genuinely different approaches, pick the most basic/common one, or ask the user which they mean instead of dumping all of them. This applies even when the excerpts present the variants as separate tabs/sections for the same tool (e.g. "Serial" vs "Distributed Memory") — that is one question with multiple modes, not multiple questions each needing its own excerpt answered; pick the simplest (usually Serial/single-node) unless the question itself specifies scale or parallelism.
@@ -332,7 +339,7 @@ async function handleChat(request, env) {
     { role: "user", content: question },
   ];
 
-  const aiStream = await env.AI.run(CHAT_MODEL, { messages, stream: true, max_tokens: 1024 });
+  const aiStream = await env.AI.run(CHAT_MODEL, { messages, stream: true, max_tokens: CHAT_MAX_TOKENS });
 
   // Re-emit the model's SSE stream as our own event shape, with sources first.
   // Plain text is forwarded token-by-token as it arrives; #SBATCH blocks are
@@ -342,6 +349,10 @@ async function handleChat(request, env) {
     async start(controller) {
       controller.enqueue(sse({ type: "sources", sources: sources.map(({ text, ...s }) => s) }));
       const sbatchFilter = createSbatchStreamFilter((text) => controller.enqueue(sse({ type: "token", text })));
+      // Runs first: rewrites 【n†...】 citations to [n] (see citations.mjs).
+      // The citation filter drops leading whitespace, so any emit is visible text.
+      let answered = false;
+      const citationFilter = createCitationStreamFilter((text) => { answered = true; return sbatchFilter.push(text); });
       const reader = aiStream.getReader();
       const decoder = new TextDecoder();
       let buf = "";
@@ -360,10 +371,12 @@ async function handleChat(request, env) {
             // Older Workers AI models (llama) emit {response}; newer OpenAI-compatible
             // models (granite) emit {choices:[{delta:{content}}]} chunks instead.
             const chunk = parsed.response ?? parsed.choices?.[0]?.delta?.content;
-            if (chunk) await sbatchFilter.push(chunk);
+            if (chunk) await citationFilter.push(chunk);
           } catch { /* partial line */ }
         }
       }
+      await citationFilter.flush();
+      if (!answered) await sbatchFilter.push(EMPTY_ANSWER);
       sbatchFilter.flush();
       controller.enqueue(sse({ type: "done" }));
       controller.close();
@@ -491,13 +504,15 @@ async function callTool(env, name, args) {
         { role: "system", content: SYSTEM_PROMPT + buildStatusBlock(status) + "\n\nDocumentation excerpts:\n\n" + buildContext(sources) },
         { role: "user", content: args.question },
       ],
-      max_tokens: 1024,
+      max_tokens: CHAT_MAX_TOKENS,
     });
     const cites = sources.map((s, i) => `[${i + 1}] ${s.title}: ${s.url}`).join("\n");
     // Older Workers AI models (llama) return {response}; newer OpenAI-compatible
     // models (granite, mistral) return {choices:[{message:{content}}]} instead.
     const text = res.response ?? res.choices?.[0]?.message?.content;
-    const answer = realignSbatchBlocks(await fillMissingModuleVersions(text));
+    // content is null when the model returns only reasoning.
+    const cleaned = cleanAnswer(text ?? "");
+    const answer = cleaned ? realignSbatchBlocks(await fillMissingModuleVersions(cleaned)) : EMPTY_ANSWER;
     return { content: [{ type: "text", text: `${answer}\n\nSources:\n${cites}` }] };
   }
   if (name === "read_nesi_doc") {
