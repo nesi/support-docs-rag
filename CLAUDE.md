@@ -16,7 +16,7 @@ Five-stage retrieval (`retrieve()` in worker.js):
 2. **Embed** question — `@cf/baai/bge-m3` (1024 dims).
 3. **Vector search** — Vectorize index `nesi-docs`, wide net `RETRIEVE_K=20`.
 4. **Rerank** — cross-encoder `@cf/baai/bge-reranker-base`, keep top `CONTEXT_K=6`. Reads query+chunk together; biggest quality win. Falls back to vector order if rerank fails.
-5. **Grounded answer** — `@cf/meta/llama-3.3-70b-instruct-fp8-fast` under a strict system prompt (answer only from excerpts, cite `[n]`, refuse below `MIN_RERANK_SCORE=0.2`).
+5. **Grounded answer** — `@cf/meta/llama-3.3-70b-instruct-fp8-fast` under a strict system prompt (answer only from excerpts, cite `[n]`, refuse below `MIN_RERANK_SCORE=0.4`).
 
 Ingest pipeline (offline, `scripts/`), reading only the local `support-docs` checkout — no dependency on a deployed site. Only prose docs are embedded; module-list.json/glossary content is never ingested at all, only looked up live (see above):
 - `chunker.mjs` — markdown-aware. Splits on `##`/`###` headings, merges sections `< MIN_CHARS=400`, splits `> MAX_CHARS=3200`, targets `TARGET_CHARS=2200` (~450 tokens). `embedText` prepends breadcrumb + frontmatter description + tags so chunks carry context into vector space. Stable ids `path#chunkIndex`, or `sha256(path)[0:12]-<tail>#chunkIndex` when the path pushes the id past Vectorize's 64-byte limit (`chunkId()`). Ids must stay deterministic — that's what makes re-ingest overwrite in place. `Software/Available_Applications/*` pages' `applications[...]` macros are left for the generic Jinja strip to drop — live lookup covers that data instead, not reconstructed per page.
