@@ -41,7 +41,7 @@ npx wrangler vectorize create nesi-docs --dimensions=1024 --metric=cosine
 # (the /ai/run REST endpoint requires both) and Vectorize Edit (upsert is a write).
 export CLOUDFLARE_ACCOUNT_ID=...
 export CLOUDFLARE_API_TOKEN=...
-node scripts/ingest.mjs /path/to/support-docs/docs [--index nesi-docs] [--dry-run]
+node scripts/ingest.mjs /path/to/support-docs/docs [--index nesi-docs] [--dry-run] [--full] [--allow-mass-delete]
 
 # Inspect chunking without embedding
 node scripts/chunker.mjs /path/to/support-docs/docs --stats
@@ -50,7 +50,7 @@ node scripts/chunker.mjs /path/to/support-docs/docs --stats
 npx wrangler dev
 ```
 
-Clean rebuild (after big doc reorgs leave stale vectors): `vectorize delete` → `vectorize create` → re-ingest.
+Stale vectors are deleted on each ingest, so a clean rebuild (`vectorize delete` → `vectorize create` → re-ingest) is only needed for index-level changes (dimensions, metric).
 
 ## Config & tuning
 
