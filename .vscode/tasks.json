@@ -4,7 +4,7 @@
     {
       "label": "Run all tests",
       "type": "shell",
-      "command": "for f in scripts/eval-search.test.mjs scripts/eval-read.test.mjs scripts/eval-chunk.test.mjs scripts/eval-format.test.mjs scripts/eval-junk.test.mjs; do echo \"== $f ==\"; node \"$f\" || exit 1; done",
+      "command": "for f in scripts/eval-search.test.mjs scripts/eval-read.test.mjs scripts/eval-chunk.test.mjs scripts/eval-format.test.mjs scripts/eval-junk.test.mjs scripts/eval-status.test.mjs scripts/eval-breaks.test.mjs; do echo \"== $f ==\"; node \"$f\" || exit 1; done",
       "group": {
         "kind": "test",
         "isDefault": true
@@ -48,6 +48,20 @@
       "label": "Test: eval-junk",
       "type": "shell",
       "command": "node scripts/eval-junk.test.mjs",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: eval-status",
+      "type": "shell",
+      "command": "node scripts/eval-status.test.mjs",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: eval-breaks",
+      "type": "shell",
+      "command": "node scripts/eval-breaks.test.mjs",
       "group": "test",
       "problemMatcher": []
     }

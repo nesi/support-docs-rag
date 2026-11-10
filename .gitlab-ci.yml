@@ -33,4 +33,26 @@ unit-tests:
     - node scripts/eval-chunk.test.mjs
     - node scripts/eval-format.test.mjs
     - node scripts/eval-junk.test.mjs
+    - node scripts/eval-status.test.mjs
+    - node scripts/eval-breaks.test.mjs
+    - node --input-type=module -e 'import { loadCases } from "./scripts/lib-eval.mjs"; loadCases("evals/questions.jsonl")' # eval-set shape check (validateCase)
     - node scripts/eval-ingest.test.mjs
+
+# Every eval `paths` entry must exist in support-docs main -- pages get
+# renamed/moved, and a stale path silently turns a correct retrieval into a
+# miss. Needs network (public clone) but no credentials. Only runs when the
+# eval set or the checker changes, or by hand.
+eval-paths:
+  image: node:22-slim
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - evals/questions.jsonl
+        - scripts/check-eval-paths.mjs
+        - scripts/lib-eval.mjs
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends git ca-certificates
+  script:
+    - git clone --depth 1 https://github.com/nesi/support-docs.git support-docs
+    - node scripts/check-eval-paths.mjs support-docs/docs

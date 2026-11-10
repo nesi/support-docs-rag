@@ -29,9 +29,11 @@
 import { liveLookup } from "./liveData.mjs";
 import { isConfidentResponse } from "./confidence.mjs";
 import { isValidDocPath } from "./docPath.mjs";
-import { classifyJunk, junkReply } from "./junk.mjs";
+import { classifyJunk, junkReply, containsSecret, SECRET_REPLY, isRepeatQuestion, REPEAT_REPLY } from "./junk.mjs";
+import { classifyStatusQuestion, statusReply } from "./statusShortcut.mjs";
 import { realignSbatchBlocks, fillMissingModuleVersions, createSbatchStreamFilter } from "./slurmFormat.mjs";
 import { cleanAnswer, createCitationStreamFilter } from "./citations.mjs";
+import { createBreakStreamFilter } from "./breaks.mjs";
 
 const EMBED_MODEL = "@cf/baai/bge-m3";
 const RERANK_MODEL = "@cf/baai/bge-reranker-base";
@@ -56,6 +58,18 @@ const MIN_RERANK_SCORE = 0.4; // below this a chunk isn't shown as a source at a
 const STATUS_API = "https://status.nesi.org.nz/api/v2/summary.json";
 const STATUS_CACHE_TTL = 60; // seconds — edge cache for the status subrequest
 
+// Appended AFTER the excerpts, not inside SYSTEM_PROMPT: the chat model
+// (nemotron) followed a "keep it short, link the section" rule buried in
+// rule 5 poorly -- it still listed every cause from the excerpts. Placed
+// last, closest to the question, it carries more weight.
+const ANSWER_SHAPE = `
+
+=== ANSWER SHAPE (most important, overrides completeness) ===
+- At most 3 short sentences or 4 short bullets. Pick only the cause/steps that best fit THIS question; don't list every possibility the excerpts mention.
+- Then point to the docs for the rest with one line: "More: [Page title › Section heading](URL)" using the URL (with its #anchor) from the header of the excerpt you used most. Use only URLs from the excerpt headers, as markdown links — never bare <...> links or guessed URLs.
+- A requested Slurm script still goes in full (rule 12); the link replaces extra explanation, not the script.
+- No preamble, no closing filler ("If none of these work...", "If the problem persists..."). Mention support only if the excerpts say this needs support.`;
+
 const SYSTEM_PROMPT = `You are the REANNZ HPC support assistant. You answer questions about REANNZ's HPC and storage services (Research Education Advanced Network New Zealand).
 
 Rules — follow all of them strictly:
@@ -64,6 +78,7 @@ Rules — follow all of them strictly:
 3. If the excerpts do not contain the answer, say so plainly and suggest what to search the docs for or to contact [support@nesi.org.nz](mailto:support@nesi.org.nz). Do not guess.
 4. Preserve exact command syntax, module names, paths and Slurm directives from the excerpts - put them in code blocks.
 5. Be concise: lead with the answer or command, no preamble ("Let's walk through some steps", "I'd be happy to help") and no closing filler ("If none of these steps work...", "If you're still having trouble..."). Give only the steps that apply to this question — don't enumerate every possible cause. Prefer a couple of sentences or short bullets over multi-paragraph explanations. Give one script or one command, not several variants side by side — if the excerpts support multiple genuinely different approaches, pick the most basic/common one, or ask the user which they mean instead of dumping all of them. This applies even when the excerpts present the variants as separate tabs/sections for the same tool (e.g. "Serial" vs "Distributed Memory") — that is one question with multiple modes, not multiple questions each needing its own excerpt answered; pick the simplest (usually Serial/single-node) unless the question itself specifies scale or parallelism.
+   Link rather than reproduce: see ANSWER SHAPE at the end, which takes priority over completeness.
 6. The entity NeSI (New Zealand eScience Infrastructure) has been incorporated into REANNZ (Research Education Advanced Network New Zealand).
    Avoid saying "NeSI" for the organisation — say "REANNZ HPC" instead. This does NOT apply to hardware/service names: keep using the specific name from the excerpts (e.g. "Mahuika", "HPC3", "Freezer", "OnDemand") when talking about clusters, storage, or tools.
    Each cluster and service keeps its own single name — OnDemand is called "OnDemand", full stop, regardless of which cluster the user is on. Only prefix or combine two proper nouns together if an excerpt itself writes them that way as one phrase.
@@ -238,11 +253,22 @@ function buildContext(sources) {
 // when everything is operational — there's nothing worth surfacing to the
 // model in that case, and it keeps the "not confident" refusal path honest
 // (no live status = don't imply we checked and it's fine).
-async function fetchStatus() {
+// Raw Statuspage summary (edge-cached), or null on failure. fetchStatus()
+// below reduces it to "only what's wrong"; the status shortcut needs the
+// full component list too, to answer "is X down?" with "no, it's operational".
+async function fetchStatusSummary() {
   try {
     const res = await fetch(STATUS_API, { cf: { cacheTtl: STATUS_CACHE_TTL, cacheEverything: true } });
-    if (!res.ok) return null;
-    const data = await res.json();
+    return res.ok ? await res.json() : null;
+  } catch (e) {
+    console.warn("status fetch failed", e);
+    return null;
+  }
+}
+
+async function fetchStatus() {
+  try {
+    const data = await fetchStatusSummary();
     if (!data?.status || data.status.indicator === "none") return null;
 
     // Each entry keeps its raw `name` alongside the formatted `text` line so
@@ -348,20 +374,43 @@ async function junkKind(question) {
   return hits.length ? null : kind;
 }
 
+// All pre-retrieval shortcuts, in priority order. Returns canned reply text,
+// or null to carry on with normal retrieval.
+//  1. Pasted secrets -- first, and never overridden: the text must not reach Workers AI.
+//  2. "Is Mahuika down?" -- answered from the live status page (statusShortcut.mjs).
+//  3. Junk / human / identity / rude (junk.mjs), overridable by a known app/term name.
+//  4. Exact repeat of the user's previous message (chat only -- MCP has no
+//     history). After status/junk on purpose: a repeated "is mahuika down?"
+//     should re-check live status, and a repeated "hi" just gets the greeting.
+async function shortcutReply(question, history = []) {
+  if (containsSecret(question)) return SECRET_REPLY;
+  const statusQ = classifyStatusQuestion(question);
+  if (statusQ) {
+    const reply = statusReply(await fetchStatusSummary(), statusQ);
+    if (reply) return reply;
+  }
+  const junk = await junkKind(question);
+  if (junk) return junkReply(junk);
+  return isRepeatQuestion(question, history) ? REPEAT_REPLY : null;
+}
+
 async function handleChat(request, env) {
   if (request.method !== "POST") return json({ error: "POST only" }, 405);
   if (!checkAuth(request, env)) return json({ error: "unauthorized" }, 401);
-  const { question, history = [] } = await request.json();
+  const { question, history: rawHistory = [] } = await request.json();
   if (!question?.trim()) return json({ error: "question required" }, 400);
+  // The client replays history every turn, so a secret pasted earlier would
+  // otherwise reach the LLM on every later question. Drop those turns.
+  const history = rawHistory.filter((m) => !containsSecret(m?.content));
 
-  const junk = await junkKind(question);
-  if (junk) {
+  const shortcut = await shortcutReply(question, history);
+  if (shortcut) {
     const encoder = new TextEncoder();
     const sse = (obj) => encoder.encode(`data: ${JSON.stringify(obj)}\n\n`);
     return sseResponse(new ReadableStream({
       start(controller) {
         controller.enqueue(sse({ type: "sources", sources: [] }));
-        controller.enqueue(sse({ type: "token", text: junkReply(junk) }));
+        controller.enqueue(sse({ type: "token", text: shortcut }));
         controller.enqueue(sse({ type: "done" }));
         controller.close();
       },
@@ -398,7 +447,7 @@ async function handleChat(request, env) {
   }
 
   const messages = [
-    { role: "system", content: SYSTEM_PROMPT + buildStatusBlock(status) + "\n\nDocumentation excerpts:\n\n" + buildContext(sources) },
+    { role: "system", content: SYSTEM_PROMPT + buildStatusBlock(status) + "\n\nDocumentation excerpts:\n\n" + buildContext(sources) + ANSWER_SHAPE },
     ...history.slice(-6),
     { role: "user", content: question },
   ];
@@ -412,7 +461,13 @@ async function handleChat(request, env) {
   const body = new ReadableStream({
     async start(controller) {
       controller.enqueue(sse({ type: "sources", sources: sources.map(({ text, ...s }) => s) }));
-      const sbatchFilter = createSbatchStreamFilter((text) => controller.enqueue(sse({ type: "token", text })));
+      // Last stage: splits the answer into chat bubbles (answer / code block /
+      // "More:" link) with `break` events -- see breaks.mjs.
+      const breakFilter = createBreakStreamFilter(
+        (text) => controller.enqueue(sse({ type: "token", text })),
+        () => controller.enqueue(sse({ type: "break" })),
+      );
+      const sbatchFilter = createSbatchStreamFilter((text) => breakFilter.push(text));
       // Runs first: rewrites 【n†...】 citations to [n] (see citations.mjs).
       // The citation filter drops leading whitespace, so any emit is visible text.
       let answered = false;
@@ -442,6 +497,7 @@ async function handleChat(request, env) {
       await citationFilter.flush();
       if (!answered) await sbatchFilter.push(EMPTY_ANSWER);
       sbatchFilter.flush();
+      breakFilter.flush();
       controller.enqueue(sse({ type: "done" }));
       controller.close();
     },
@@ -553,8 +609,8 @@ async function callTool(env, name, args) {
     return { content: [{ type: "text", text }] };
   }
   if (name === "ask_nesi_docs") {
-    const junk = await junkKind(String(args.question ?? ""));
-    if (junk) return { content: [{ type: "text", text: junkReply(junk) }] };
+    const shortcut = await shortcutReply(String(args.question ?? ""));
+    if (shortcut) return { content: [{ type: "text", text: shortcut }] };
     const [sources, status] = await Promise.all([retrieve(env, args.question), fetchStatus()]);
     if (!isConfidentResponse(sources, MIN_RERANK_SCORE)) {
       const quote = relevantStatusQuote(status, args.question);
@@ -567,7 +623,7 @@ async function callTool(env, name, args) {
     }
     const res = await env.AI.run(CHAT_MODEL, {
       messages: [
-        { role: "system", content: SYSTEM_PROMPT + buildStatusBlock(status) + "\n\nDocumentation excerpts:\n\n" + buildContext(sources) },
+        { role: "system", content: SYSTEM_PROMPT + buildStatusBlock(status) + "\n\nDocumentation excerpts:\n\n" + buildContext(sources) + ANSWER_SHAPE },
         { role: "user", content: args.question },
       ],
       max_tokens: CHAT_MAX_TOKENS,

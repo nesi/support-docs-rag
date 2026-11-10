@@ -7,15 +7,39 @@ import { readFileSync } from "node:fs";
 export function loadCases(file) {
   return readFileSync(file, "utf8")
     .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith("//"))
-    .map((l, i) => {
+    .map((l, i) => ({ l: l.trim(), line: i + 1 }))
+    .filter(({ l }) => l && !l.startsWith("//"))
+    .map(({ l, line }) => {
+      let c;
       try {
-        return JSON.parse(l);
+        c = JSON.parse(l);
       } catch (e) {
-        throw new Error(`${file}: bad JSON on line ${i + 1}: ${e.message}`);
+        throw new Error(`${file}: bad JSON on line ${line}: ${e.message}`);
       }
+      const problem = validateCase(c);
+      if (problem) throw new Error(`${file}: line ${line} (${c.id ?? "no id"}): ${problem}`);
+      return c;
     });
+}
+
+/**
+ * Shape check, so a malformed case fails the run loudly instead of erroring
+ * per-request and being silently excluded from every metric (which is what
+ * a `"paths": "<url>"` string did). Returns a problem string, or null.
+ */
+export function validateCase(c) {
+  if (!c || typeof c !== "object") return "not an object";
+  if (typeof c.id !== "string" || !c.id) return "missing id";
+  if (typeof c.question !== "string" || !c.question.trim()) return "missing question";
+  if (c.expect !== "answer" && c.expect !== "refuse") return `expect must be "answer" or "refuse", got ${JSON.stringify(c.expect)}`;
+  if (c.paths !== undefined) {
+    if (!Array.isArray(c.paths)) return `paths must be an array of docs-relative .md paths, got ${JSON.stringify(c.paths)}`;
+    const bad = c.paths.find((p) => typeof p !== "string" || !p.endsWith(".md") || /^https?:/.test(p));
+    if (bad !== undefined) return `paths entries must be docs-relative .md paths (e.g. "Storage/Data_Recovery.md"), got ${JSON.stringify(bad)}`;
+  }
+  if (c.must_include !== undefined && !(Array.isArray(c.must_include) && c.must_include.every((s) => typeof s === "string")))
+    return "must_include must be an array of strings";
+  return null;
 }
 
 /**
