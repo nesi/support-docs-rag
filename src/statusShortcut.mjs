@@ -18,7 +18,7 @@
 // 'connection refused' when I ssh" is a real troubleshooting question and
 // goes to retrieval, where the LLM already sees the live status block.
 
-import { normalise } from "./junk.mjs";
+import { normalise, rx } from "./junk.mjs";
 
 const STATUS_PAGE = "[status.nesi.org.nz](https://status.nesi.org.nz)";
 
@@ -45,17 +45,17 @@ const DOWN = "(down|up|offline|online|working|broken|out|having (problems|issues
 
 const CHECK_PATTERNS = [
   // "is mahuika down", "is the login node working right now"
-  new RegExp(`^(is|are) (the )?(?<target>.+?) ${DOWN}${WHEN}$`),
+  rx(`^(is|are) (the )?(?<target>.+?) ${DOWN}${WHEN}$`),
   // "any outages", "is there maintenance on ondemand today"
-  new RegExp(`^((is|are) )?(there )?(an? |any )?(current |known |planned |scheduled )?(outages?|issues?|problems?|maintenance|incidents?|downtime)( (with|on|for|affecting|to) (the )?(?<target>.+?))?${WHEN}$`),
+  rx(`^((is|are) )?(there )?(an? |any )?(current |known |planned |scheduled )?(outages?|issues?|problems?|maintenance|incidents?|downtime)( (with|on|for|affecting|to) (the )?(?<target>.+?))?${WHEN}$`),
   // "status", "system status", "what's the status of ondemand"
-  new RegExp(`^((what is|what's|whats|check) )?(the )?(current )?(system |service |hpc |cluster )?status( (of|for) (the )?(?<target>.+?))?${WHEN}$`),
+  rx(`^((what is|what's|whats|check) )?(the )?(current )?(system |service |hpc |cluster )?status( (of|for) (the )?(?<target>.+?))?${WHEN}$`),
   // "mahuika down", "freezer outage" (not "<x> status": "job status" means squeue)
-  new RegExp(`^(?<target>.+?) (down|outage|offline)${WHEN}$`),
+  rx(`^(?<target>.+?) (down|outage|offline)${WHEN}$`),
 ];
 const WHY_PATTERNS = [
   // "why is mahuika down", "why isn't ondemand working"
-  new RegExp(`^why (is|are|isn't|aren't|is not|are not) (the )?(?<target>.+?) (down|offline|not working|working|unavailable|so slow|slow|broken)${WHEN}$`),
+  rx(`^why (is|are|isn't|aren't|is not|are not) (the )?(?<target>.+?) (down|offline|not working|working|unavailable|so slow|slow|broken)${WHEN}$`),
 ];
 
 function resolveTargets(target) {

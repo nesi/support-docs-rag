@@ -13,6 +13,7 @@ const questions = [
   ["mahuika down?", "check"], ["is everything ok", "check"], ["Is anything down?", "check"], ["is slurm working", "check"],
   ["Is the login node down?", "check"], ["Is the HPC down again?", "check"], ["Are the login nodes down?", "check"],
   ["why is ondemand not working", "why"], ["Why is Mahuika down?", "why"], ["why isn't jupyter working?", "why"],
+  ["why isnt jupyter working", "why"], ["whats the status of globus", "check"],
   // not status questions
   ["is my job running", null], ["Is it down?", null], ["job status", null], ["how do I check my job status", null],
   ["Is Python available on Mahuika?", null], ["is GROMACS working with GPUs", null],
