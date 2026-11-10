@@ -34,11 +34,10 @@ import { cleanAnswer, createCitationStreamFilter } from "./citations.mjs";
 
 const EMBED_MODEL = "@cf/baai/bge-m3";
 const RERANK_MODEL = "@cf/baai/bge-reranker-base";
-// const CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-const CHAT_MODEL = "@cf/nvidia/nemotron-3-120b-a12b";
-// Covers hidden reasoning plus the answer. Nemotron's reasoning counts toward
-// this; at 1024 it sometimes used the whole budget and returned no answer.
-// Billed on tokens used, so a higher cap costs nothing on typical answers.
+// nemotron-3-120b-a12b is deprecated by Workers AI on 2026-11-20.
+const CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+// Answer token cap. Sized for reasoning models, whose hidden reasoning counts
+// toward it. Billed on tokens used, so a high cap costs nothing extra.
 const CHAT_MAX_TOKENS = 4096;
 // Shown when the model returns no visible text (e.g. ran out of tokens).
 const EMPTY_ANSWER = "Sorry, I couldn't produce an answer that time. Please try again, or contact [support@nesi.org.nz](mailto:support@nesi.org.nz).";
