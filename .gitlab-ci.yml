@@ -35,6 +35,7 @@ unit-tests:
     - node scripts/eval-junk.test.mjs
     - node scripts/eval-status.test.mjs
     - node scripts/eval-breaks.test.mjs
+    - node scripts/eval-fallback.test.mjs
     - node --input-type=module -e 'import { loadCases } from "./scripts/lib-eval.mjs"; loadCases("evals/questions.jsonl")' # eval-set shape check (validateCase)
     - node scripts/eval-ingest.test.mjs
 

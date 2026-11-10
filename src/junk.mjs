@@ -56,6 +56,8 @@ export const SECRET_REPLY =
 // Small helper so the patterns below read as word lists, not regex soup.
 const any = (...alts) => `(?:${alts.join("|")})`;
 const opt = (...alts) => `(?: ${any(...alts)})?`;
+// Compile with apostrophes removed, matching normalise(): "that's" -> "thats".
+export const rx = (src) => new RegExp(String(src).replace(/'\??/g, ""));
 
 const ADDRESSEE = opt("there", "bot", "claude", "all", "everyone", "team", "folks", "mate", "guys", "y'all", "again", "friend");
 const POLITE = opt("please", "pls", "plz", "thanks", "thank you");
@@ -83,28 +85,28 @@ const BYE = any(
 
 const PATTERNS = [
   // "hi", "hey hey", "kia ora koutou", "hello there", "good morning team"
-  ["greeting", new RegExp(`^${GREETING}(?: ${GREETING})*${ADDRESSEE}$`)],
+  ["greeting", rx(`^${GREETING}(?: ${GREETING})*${ADDRESSEE}$`)],
   // "thanks", "ok thanks", "great, cheers mate", "thanks heaps", "that worked thanks"
-  ["thanks", new RegExp(
+  ["thanks", rx(
     `^(?:${ACK} )*${THANKS}${opt("so much", "heaps", "mate", "a lot", "very much", "again", "for that", "for the help", "for your help", "anyway")}${opt("bye", "cya", "cheers")}$` +
     `|^${ACK}(?: ${ACK})*${opt(...["thanks", "cheers", "ta"])}$`
   )],
   // "bye", "ok bye", "thanks bye", "ka kite anō"
-  ["goodbye", new RegExp(`^(?:${ACK} |${THANKS} )*${BYE}${ADDRESSEE}$`)],
+  ["goodbye", rx(`^(?:${ACK} |${THANKS} )*${BYE}${ADDRESSEE}$`)],
   // "test", "testing 1 2 3", "is this working", "are you there", "can you hear me"
-  ["test", new RegExp("^" + any(
+  ["test", rx("^" + any(
     "test(?:ing)?(?: (?:test(?:ing)?|\\d+))*", "tst", "this is (?:a|just a) test", "just (?:a )?test(?:ing)?", "test (?:message|question|query|msg)",
     "ping", "pong", "hello world", "foo", "bar", "foobar", "baz", "lorem ipsum.*", "mic check", "check",
-    "(?:is|does) (?:this|it) (?:thing )?(?:work|working|on)", "are you (?:there|working|alive|awake|online|on)",
+    "(?:is|does) (?:this|it) (?:thing )?(?:work|working|on)", "are you (?:there|working|alive|awake|online|on|available|up)",
     "(?:is )?(?:any(?:one|body)|some(?:one|body)) (?:there|home|here)", "can you hear me", "you there", "still there",
   ) + "$")],
   // keyboard mash (explicit) -- see also the generic rules in classifyJunk()
-  ["gibberish", new RegExp("^" + any(
+  ["gibberish", rx("^" + any(
     "asdf\\w*", "qwer\\w*", "zxcv\\w*", "jkl;?\\w*", "sdf\\w*", "hjk\\w*", "aoeu\\w*", "xyz",
     "lol+", "lmao+", "rofl", "ha(?:ha)+h?", "he(?:he)+", "hm+", "um+", "uh+", "er+m*", "meh", "idk", "oops", "whatever", "blah(?: blah)*",
   ) + "$")],
-  ["human", new RegExp("^" + any(
-    `(?:(?:can|could|may) i |i (?:want|need|would like|'d like) to |let me |how (?:do|can) i |is it possible to )?(?:talk|speak|chat) (?:to|with) (?:a |an |the |some )?(?:real |actual |live )?(?:human|person|someone|somebody|staff|staff member|support|support team|agent|operator|people|humans)`,
+  ["human", rx("^" + any(
+    `(?:(?:can|could|may) i |i (?:want|need|would like) to |i'd like to |let me |how (?:do|can) i |is it possible to )?(?:talk|speak|chat) (?:to|with) (?:a |an |the |some )?(?:real |actual |live )?(?:human|person|someone|somebody|staff|staff member|support|support team|agent|operator|people|humans)`,
     `(?:how (?:do|can) i |i need to |i want to |where (?:do|can) i )?(?:contact|email|e-mail|reach|get in touch with|message) (?:nesi |reannz )?(?:support|the support team|support team|helpdesk|help desk|a human|someone|a person|staff|you|you guys|the team)`,
     `(?:i (?:want|need) |get me |give me |is there |are there any )(?:a |an )?(?:real |actual |live )?(?:human|person|people|humans|agent|operator)(?: i can talk to)?`,
     `(?:what(?: is|'s) (?:the |your )?)?(?:support|helpdesk|help desk|contact) (?:email|e-mail|address|email address|details|info|number|phone number)`,
@@ -112,7 +114,7 @@ const PATTERNS = [
     `(?:how (?:do|can) i )?(?:open|raise|log|submit|create|file|lodge) (?:a )?(?:support )?(?:ticket|request|case)`,
     "human", "agent", "operator", "real person", "live agent", "helpdesk", "help desk", "support",
   ) + POLITE + "$")],
-  ["identity", new RegExp("^" + any(
+  ["identity", rx("^" + any(
     "(?:who|what) are you", "who(?:'s| is) this", "what are you for", "what(?: is|'s) your (?:name|purpose)", "your name",
     "who (?:made|built|created|wrote|runs) (?:you|this)", "are you (?:sentient|alive|conscious)",
     "what (?:can|do) you (?:do|know)", "what (?:can|should) i ask(?: you)?", "what questions can you answer",
@@ -142,7 +144,7 @@ const PATTERNS = [
     "still (?:not working|doesn't work|broken|stuck)", "(?:that|it) still (?:doesn't|does not) work", "nope(?: that's wrong)?",
     "no(?:,)? that(?:'s| is) (?:wrong|not (?:it|right))", "try again", "you didn't answer(?: my question)?", "that's not an answer",
   ) + "$")],
-  ["rude", new RegExp("^" + any(
+  ["rude", rx("^" + any(
     "(?:you(?:'re| are)|ur|u r|this (?:bot |thing |assistant |chat )?is|this|it(?:'s| is)) (?:so |really |fucking |bloody |completely |totally |utterly )?(?:useless|stupid|dumb|crap|shit|shite|garbage|rubbish|terrible|hopeless|pathetic|an idiot|a joke|trash|awful|the worst|worthless|pointless|braindead|brain dead|a waste of time)(?: (?:bot|ai|thing|assistant))?",
     "(?:stupid|useless|dumb|crap|shit|shite|rubbish|garbage|idiot|terrible|bad|worst|pointless|awful) (?:bot|ai|thing|assistant|machine|answer|response|reply)(?: ever)?",
     "(?:fuck|f\\*+k|screw|bugger|sod) (?:you|off|this|it|this bot|this thing)",
@@ -155,9 +157,9 @@ const PATTERNS = [
 export function normalise(question) {
   return String(question ?? "")
     .toLowerCase()
-    .replace(/[’‘]/g, "'")
+    .replace(/[’‘']/g, "") // "didn't" and "didnt" alike -- patterns are compiled the same way (rx)
     .replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}\u{1F3FB}-\u{1F3FF}]/gu, " ")
-    .replace(/(^|\s)(?:[:;=8][-']?[)(\]\[dpo3/\\|*]+|<3|\^_?\^|xd)(?=\s|$)/gu, " ") // :) ;-) :D <3 ^_^ xD
+    .replace(/(^|\s)(?:[:;=][-']?[)(\]\[dpo3/\\|*]+|<3|\^_?\^|xd)(?=\s|$)/gu, " ") // :) ;-) :D <3 ^_^ xD
     .trim()
     .replace(/[\s!?.,:;~*…'"`)(]+$/u, "")
     .replace(/^[\s!?.,:;~*…'"`)(]+/u, "")
@@ -177,9 +179,10 @@ export function classifyJunk(question) {
   const squashed = t.replace(/\s/g, "");
   if (/^(.)\1{3,}$/u.test(squashed)) return "gibberish"; // one char repeated 4+ times: "aaaaaa" (not "cc")
   if (/^(.{2,4})\1{2,}$/u.test(squashed)) return "gibberish"; // a short chunk repeated 3+ times: "asdasdasd", "jkljkljkl"
-  // A run along one keyboard row, 7+ letters: "sdfghjkl", "qwertyuiop", "zxcvbnm". 7+ so real
-  // single-row words ("flask", "torque", "pipette"...) don't trip it at 5-6.
-  if (/^(?:[qwertyuiop]{7,}|[asdfghjkl]{7,}|[zxcvbnm]{6,})$/.test(squashed) && !/^(?:typewriter|proprietor|perpetuity|repertoire)$/.test(squashed)) return "gibberish";
+  // A run along the middle or bottom keyboard row: "sdfghjkl", "lkjhgfds", "zxcvbnm". Not the
+  // top row -- it spells real words ("pipette", "torque", "typewriter"); top-row mash like
+  // "qwerty..." is in the explicit list above. Middle row needs 8+ ("flask", "alfalfa").
+  if (/^(?:[asdfghjkl]{8,}|[zxcvbnm]{6,})$/.test(squashed)) return "gibberish";
   return null;
 }
 
@@ -242,10 +245,10 @@ export function examples(rand = Math.random) {
 // place it where it reads best, or leave it out.
 const REPLIES = {
   greeting: [
-    (ex) => `Kia ora! I answer questions about REANNZ HPC and storage using the support docs. ${ex}.`,
-    (ex) => `Hi! Ask me anything about REANNZ HPC and I'll answer from the support docs. ${ex}.`,
-    (ex) => `Kia ora, what can I help you with? I know the REANNZ HPC and storage support docs. ${ex}.`,
-    (ex) => `Hello! I can help with REANNZ HPC and storage questions. ${ex}.`,
+    (ex) => `Kia ora! I answer questions about REANNZ HPC and storage using the support docs. ${ex}`,
+    (ex) => `Hi! Ask me anything about REANNZ HPC and I'll answer from the support docs. ${ex}`,
+    (ex) => `Kia ora, what can I help you with? I know the REANNZ HPC and storage support docs. ${ex}`,
+    (ex) => `Hello! I can help with REANNZ HPC and storage questions. ${ex}`,
   ],
   thanks: [
     () => "You're welcome! Ask another question about REANNZ HPC any time.",
@@ -260,17 +263,17 @@ const REPLIES = {
     () => `Wait! Don't go.`,
   ],
   test: [
-    (ex) => `I'm working. Ask me a question about REANNZ HPC and I'll answer from the support docs. ${ex}.`,
-    (ex) => `Yep, I'm here and listening. ${ex}.`,
-    (ex) => `Loud and clear! Try a real question. ${ex}.`,
-    (ex) => `Test received, everything's working. ${ex}.`,
+    (ex) => `I'm working. Ask me a question about REANNZ HPC and I'll answer from the support docs. ${ex}`,
+    (ex) => `Yep, I'm here and listening. ${ex}`,
+    (ex) => `Loud and clear! Try a real question. ${ex}`,
+    (ex) => `Test received, everything's working. ${ex}`,
   ],
   gibberish: [
-    (ex) => `I didn't catch a question there. I answer questions about REANNZ HPC support docs. ${ex}.`,
-    (ex) => `Sorry, I'm not sure what you mean. ${ex}.`,
+    (ex) => `I didn't catch a question there. I answer questions about REANNZ HPC support docs. ${ex}`,
+    (ex) => `Sorry, I'm not sure what you mean. ${ex}`,
     () => `Indeed.`,
     () => `ok.`,
-    (ex) => `I'm not sure how to help with that. Try asking about REANNZ HPC. ${ex}.`,
+    (ex) => `I'm not sure how to help with that. Try asking about REANNZ HPC. ${ex}`,
   ],
   human: [
     () => `You can reach the support team at ${SUPPORT}. See ${WHAT_TO_INCLUDE} for what to put in your request so they can help sooner.`,
@@ -278,9 +281,9 @@ const REPLIES = {
     () => `Email ${SUPPORT} to reach a person. ${WHAT_TO_INCLUDE} lists what to include so they can help quickly.`,
   ],
   identity: [
-    (ex) => `I'm an AI assistant that answers questions about REANNZ HPC and storage from the support docs at [docs.nesi.org.nz](https://docs.nesi.org.nz), with links to the pages I used. I can't see your account, jobs or files, and I can make mistakes, so for anything account-specific email ${SUPPORT}. ${ex}.`,
-    (ex) => `I'm an AI assistant for the REANNZ HPC support docs: ask a question and I'll answer from [docs.nesi.org.nz](https://docs.nesi.org.nz) with links to the relevant pages. I can't see your account or jobs, so for those email ${SUPPORT}. ${ex}.`,
-    (ex) => `I answer REANNZ HPC and storage questions using the support docs, and link the pages I used. I'm an AI, so I can get things wrong, and I can't see your account, jobs or files. ${ex}.`,
+    (ex) => `I'm an AI assistant that answers questions about REANNZ HPC and storage from the support docs at [docs.nesi.org.nz](https://docs.nesi.org.nz), with links to the pages I used. I can't see your account, jobs or files, and I can make mistakes, so for anything account-specific email ${SUPPORT}. ${ex}`,
+    (ex) => `I'm an AI assistant for the REANNZ HPC support docs: ask a question and I'll answer from [docs.nesi.org.nz](https://docs.nesi.org.nz) with links to the relevant pages. I can't see your account or jobs, so for those email ${SUPPORT}. ${ex}`,
+    (ex) => `I answer REANNZ HPC and storage questions using the support docs, and link the pages I used. I'm an AI, so I can get things wrong, and I can't see your account, jobs or files. ${ex}`,
   ],
   unhelpful: [
     () => `Sorry about that. What's the exact command you ran and the error message you're seeing? With that I can try again, or you can email ${SUPPORT} (see ${WHAT_TO_INCLUDE}).`,

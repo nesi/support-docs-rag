@@ -34,6 +34,7 @@ import { classifyStatusQuestion, statusReply } from "./statusShortcut.mjs";
 import { realignSbatchBlocks, fillMissingModuleVersions, createSbatchStreamFilter } from "./slurmFormat.mjs";
 import { cleanAnswer, createCitationStreamFilter } from "./citations.mjs";
 import { createBreakStreamFilter } from "./breaks.mjs";
+import { noAnswerReply } from "./fallback.mjs";
 
 const EMBED_MODEL = "@cf/baai/bge-m3";
 const RERANK_MODEL = "@cf/baai/bge-reranker-base";
@@ -430,11 +431,7 @@ async function handleChat(request, env) {
 
   if (!confident) {
     const quote = relevantStatusQuote(status, retrievalQuery);
-    const fallback = quote
-      ? `I couldn't find anything in the NeSI support docs that answers that — but there's a live status update that might explain it: "${quote}". Check [status.nesi.org.nz](https://status.nesi.org.nz) for details, or contact [support@nesi.org.nz](mailto:support@nesi.org.nz) if this doesn't look related.`
-      : status
-        ? `I couldn't find anything in the NeSI support docs that answers that. There's also a live status update for a ${status.indicator} outage or maintenance right now, though it doesn't look related — check [status.nesi.org.nz](https://status.nesi.org.nz) if you think otherwise, or contact [support@nesi.org.nz](mailto:support@nesi.org.nz).`
-        : "I couldn't find anything in the NeSI support docs that answers that. Try rephrasing with the specific service or tool name (e.g. Slurm, JupyterHub, Globus), or contact [support@nesi.org.nz](mailto:support@nesi.org.nz).";
+    const fallback = noAnswerReply({ quote, status }); // random variant, see fallback.mjs
     const body = new ReadableStream({
       start(controller) {
         controller.enqueue(sse({ type: "sources", sources: [] }));
