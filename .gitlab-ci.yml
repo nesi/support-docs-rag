@@ -28,3 +28,4 @@ unit-tests:
     - node scripts/eval-read.test.mjs
     - node scripts/eval-chunk.test.mjs
     - node scripts/eval-format.test.mjs
+    - node scripts/eval-junk.test.mjs

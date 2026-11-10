@@ -100,6 +100,11 @@ check(
   renderMarkdown("See [1] and [2]", [{ url: "https://x.test/a", title: "Foo" }]),
   '<p>See <sup class="cite" onclick="window.open(\'https://x.test/a\',\'_blank\')" title="Foo">[1]</sup> and [2]</p>'
 );
+check(
+  "unwraps a backticked mailto link into a real link",
+  renderMarkdown("Email `[support@nesi.org.nz](mailto:support@nesi.org.nz)`."),
+  '<p>Email <a href="mailto:support@nesi.org.nz" target="_blank" rel="noopener">support@nesi.org.nz</a>.</p>'
+);
 check("renders a list", renderMarkdown("- one\n- two"), "<ul><li>one</li>\n<li>two</li></ul>");
 check(
   "wraps paragraphs and turns single newlines into <br>",

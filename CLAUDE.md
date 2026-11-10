@@ -11,6 +11,8 @@ Single Cloudflare Worker (`src/worker.js`), no npm dependencies, no build step. 
 - `ALL /mcp` — stateless MCP server (JSON-RPC 2.0 over streamable HTTP). Tools: `search_nesi_docs`, `ask_nesi_docs`, `read_nesi_doc`.
 - `GET /*` — falls through to static chat UI (`public/index.html`) via the `ASSETS` binding.
 
+**Junk gate** (`src/junk.mjs`, called via `junkKind()` in `handleChat` and `ask_nesi_docs`, not `/api/search`): "test"/"hi"/"thanks"/keyboard-mash questions get a canned reply before any embed/search/rerank/LLM call. Every pattern is anchored to the whole question (so "test job" passes), and there's no length rule (so "R"/"git" pass). Any live-lookup hit overrides it. False positives are the costly mistake, so `scripts/eval-junk.test.mjs` is mostly short real questions that must get through.
+
 Five-stage retrieval (`retrieve()` in worker.js):
 1. **Live lookup** — module-list.json apps (~861) and glossary jargon (~20 terms) matched by exact, case-sensitive, whole-word name against the question (`src/liveData.mjs`). These are structured, name-keyed records, not prose, so they're looked up directly instead of pre-embedded into Vectorize — cheaper and exactly precise for any question naming a known app/term. Data fetched live from the public upstream repos (`nesi/modules-list`, `nesi/nesi-wordlist`), edge-cached (`caches.default`, 1h). Hits get `rerankScore: 1`, so they always clear `MIN_RERANK_SCORE` and sort first.
 2. **Embed** question — `@cf/baai/bge-m3` (1024 dims).

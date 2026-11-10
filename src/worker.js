@@ -29,6 +29,7 @@
 import { liveLookup } from "./liveData.mjs";
 import { isConfidentResponse } from "./confidence.mjs";
 import { isValidDocPath } from "./docPath.mjs";
+import { classifyJunk, junkReply } from "./junk.mjs";
 import { realignSbatchBlocks, fillMissingModuleVersions, createSbatchStreamFilter } from "./slurmFormat.mjs";
 
 const EMBED_MODEL = "@cf/baai/bge-m3";
@@ -58,11 +59,13 @@ Rules — follow all of them strictly:
 6. The entity NeSI (New Zealand eScience Infrastructure) has been incorporated into REANNZ (Research Education Advanced Network New Zealand).
    Avoid saying "NeSI" for the organisation — say "REANNZ HPC" instead. This does NOT apply to hardware/service names: keep using the specific name from the excerpts (e.g. "Mahuika", "HPC3", "Freezer", "OnDemand") when talking about clusters, storage, or tools.
    Each cluster and service keeps its own single name — OnDemand is called "OnDemand", full stop, regardless of which cluster the user is on. Only prefix or combine two proper nouns together if an excerpt itself writes them that way as one phrase.
-7. Format every web address or email address as a markdown link (e.g. \`[status.nesi.org.nz](https://status.nesi.org.nz)\`, \`[support@nesi.org.nz](mailto:support@nesi.org.nz)\`) — never output a bare URL or email address. Do not cite a link to internal documentation with itself.
+7. Format every web address or email address as a markdown link (e.g. [status.nesi.org.nz](https://status.nesi.org.nz), [support@nesi.org.nz](mailto:support@nesi.org.nz)) — never output a bare URL or email address, and never wrap a link in backticks or a code block. Do not cite a link to internal documentation with itself.
 8. Information from pages about specific software should be given more weight than general information when talking about that software.
 (for example, if user asks 'How do I run ANSYS on GPUs' the small amount of information on the ANSYS page about GPUs should be weighted higher than general GPU use advice, no matter how extensive or relevent.)
 9. A "LIVE SERVICE STATUS" block may be provided above the documentation excerpts, with its own instructions on when and how prominently to use it — follow those. It reflects real-time incidents/maintenance, not documentation, and always quote its text directly rather than paraphrasing.
-10. If the user names a service, cluster, or tool that the excerpts show has been renamed, replaced, or decommissioned (e.g. Māui, JupyterHub, Nearline), say so explicitly in one short clause before answering with the current equivalent — don't just silently answer about the replacement as if that's what they asked.
+10. Terminology mapping — two related cases:
+    a. If the user names a service, cluster, or tool that the excerpts show has been renamed, replaced, or decommissioned (e.g. Māui, JupyterHub, Nearline), say so explicitly as fact in one short clause (e.g. "Nearline was replaced by Freezer") before answering with the current equivalent — don't just silently answer about the replacement as if that's what they asked.
+    b. If the user uses a generic or third-party term that isn't NeSI/REANNZ terminology at all but has an obvious documented equivalent (e.g. "S3", "Glacier", "cold storage", "object storage" for Freezer), open with "Assuming you mean <current name>..." before answering — this is a vocabulary guess, not a documented fact, so phrase it as one and give the user room to correct it. Only do this when the mapping is unambiguous; if genuinely unsure which service they mean, ask instead of guessing.
 11. For job submission, the preferred and default answer is a Slurm script submitted with \`sbatch\` (see the shape below). Don't recommend OnDemand's Slurm Job Composer unless the user specifically asks about it or about a GUI/OnDemand-based workflow.
 12. When showing a Slurm submission script, use this shape — this overrides rule 4 for #SBATCH line formatting specifically. Use a single space between each flag and its value — column alignment is computed and applied downstream, not by you; do not try to pad or align the values yourself, that's how flags and values get run together or merged onto the wrong line.
     - Exactly one script, in its own fenced code block — per rule 5, don't add a second script or a second fence for an alternate mode/variant, and never combine two scripts (or a script plus an unrelated snippet) inside one fence.
@@ -240,16 +243,29 @@ async function fetchStatus() {
       .filter((i) => i.status !== "resolved" && i.status !== "postmortem")
       .map((i) => {
         const latest = i.incident_updates?.[0];
-        return { name: i.name, text: `- ${i.name} [${i.status}, impact: ${i.impact}]${latest ? `: ${latest.body}` : ""}` };
+        // `components` is this incident's OWN affected components (per the Statuspage
+        // API), not the site-wide list -- relevantStatusQuote() needs that distinction
+        // to avoid crediting an unrelated degraded component to this incident's detail.
+        return {
+          name: i.name,
+          status: i.status,
+          components: (i.components || []).map((c) => c.name),
+          text: `- ${i.name} [${i.status}, impact: ${i.impact}]${latest ? `: ${latest.body}` : ""}`,
+        };
       });
 
     const maintenances = (data.scheduled_maintenances || [])
       .filter((m) => m.status === "in_progress" || m.status === "scheduled")
-      .map((m) => ({ name: m.name, text: `- ${m.name} [${m.status}]: ${m.scheduled_for} → ${m.scheduled_until}` }));
+      .map((m) => ({
+        name: m.name,
+        status: m.status,
+        components: (m.components || []).map((c) => c.name),
+        text: `- ${m.name} [${m.status}]: ${m.scheduled_for} → ${m.scheduled_until}`,
+      }));
 
     const affected = (data.components || [])
       .filter((c) => c.status && c.status !== "operational")
-      .map((c) => ({ name: c.name, text: `- ${c.name}: ${c.status.replace(/_/g, " ")}${c.description ? ` — ${c.description}` : ""}` }));
+      .map((c) => ({ name: c.name, status: c.status, text: `- ${c.name}: ${c.status.replace(/_/g, " ")}${c.description ? ` — ${c.description}` : ""}` }));
 
     return { indicator: data.status.indicator, description: data.status.description, incidents, maintenances, affected };
   } catch (e) {
@@ -260,25 +276,43 @@ async function fetchStatus() {
 
 // A truthy `status` (indicator !== "none") doesn't guarantee an open incident
 // or scheduled maintenance entry -- a component can be manually marked
-// degraded on Statuspage with neither. Returns null in that case rather than
-// a quote string, so callers don't interpolate `undefined` into user text.
+// degraded on Statuspage with neither, so this checks affected components
+// on their own too, not just the primary incident/maintenance. Otherwise a
+// "Jobs running on HPC: degraded_performance" flag with no incident text
+// attached is invisible here even though it's exactly the kind of thing
+// worth a one-line mention for a "why is my job slow to start" question.
+//
+// The primary incident/maintenance is only matched against ITS OWN name and
+// components (from the Statuspage API), not the site-wide affected list --
+// otherwise an unrelated degraded component (e.g. "Jobs running on HPC")
+// gets wrongly credited to whatever the primary incident happens to be
+// (e.g. a Freezer/tape incident that doesn't actually touch that component).
 //
 // Used only on the "docs found nothing" path, where there's no LLM call to
 // judge relevance itself — so this does the matching heuristically (name or
-// significant-word overlap with the question) rather than dumping the full
-// incident/maintenance description regardless of topic. No match -> null,
-// so the caller can fall back to a generic "there's an unrelated outage"
-// mention instead of quoting something that may have nothing to do with
-// what was asked.
+// significant-word overlap with the question, singular/plural-insensitive:
+// a component named "Jobs ..." should still match a question about "job").
+// Returns a short "name (status)" string rather than the full incident
+// body -- this is a passing mention pointing at the status page, not the
+// place to explain the incident in detail. No match -> null, so the caller
+// falls back to a generic "there's an unrelated outage" mention instead.
 function relevantStatusQuote(status, question) {
-  const primary = status?.incidents[0] || status?.maintenances[0];
-  if (!primary) return null;
+  if (!status) return null;
   const q = question.toLowerCase();
-  const names = [primary.name, ...(status.affected || []).map((a) => a.name)];
-  const related = names.some(
-    (name) => q.includes(name.toLowerCase()) || name.toLowerCase().split(/\s+/).some((w) => w.length > 3 && q.includes(w))
-  );
-  return related ? primary.text : null;
+  const nameMatches = (name) => {
+    const lower = name.toLowerCase();
+    if (q.includes(lower)) return true;
+    return lower.split(/\s+/).some((w) => w.length > 3 && (q.includes(w) || q.includes(w.replace(/s$/, ""))));
+  };
+
+  const primary = status.incidents[0] || status.maintenances[0];
+  if (primary) {
+    const names = [primary.name, ...(primary.components || [])];
+    if (names.some(nameMatches)) return `${primary.name} (${primary.status})`;
+  }
+
+  const component = status.affected.find((a) => nameMatches(a.name));
+  return component ? `${component.name}: ${component.status.replace(/_/g, " ")}` : null;
 }
 
 function buildStatusBlock(status) {
@@ -295,11 +329,36 @@ function buildStatusBlock(status) {
 }
 
 /* ---------------------------- /api/chat --------------------------- */
+// Junk gate ("test", "hi", keyboard mash): answered with a canned reply before
+// any embed/search/rerank/LLM call. A known app/term name (liveLookup hit)
+// always overrides it, so a module that happens to be called e.g. "foo" still
+// gets looked up. Only the current question is checked, never history.
+async function junkKind(question) {
+  const kind = classifyJunk(question);
+  if (!kind) return null;
+  const hits = await liveLookup(question).catch(() => []);
+  return hits.length ? null : kind;
+}
+
 async function handleChat(request, env) {
   if (request.method !== "POST") return json({ error: "POST only" }, 405);
   if (!checkAuth(request, env)) return json({ error: "unauthorized" }, 401);
   const { question, history = [] } = await request.json();
   if (!question?.trim()) return json({ error: "question required" }, 400);
+
+  const junk = await junkKind(question);
+  if (junk) {
+    const encoder = new TextEncoder();
+    const sse = (obj) => encoder.encode(`data: ${JSON.stringify(obj)}\n\n`);
+    return sseResponse(new ReadableStream({
+      start(controller) {
+        controller.enqueue(sse({ type: "sources", sources: [] }));
+        controller.enqueue(sse({ type: "token", text: junkReply(junk) }));
+        controller.enqueue(sse({ type: "done" }));
+        controller.close();
+      },
+    }));
+  }
 
   // Fold short conversation history into the retrieval query so follow-ups
   // like "and how much memory?" still retrieve the right pages.
@@ -480,6 +539,8 @@ async function callTool(env, name, args) {
     return { content: [{ type: "text", text }] };
   }
   if (name === "ask_nesi_docs") {
+    const junk = await junkKind(String(args.question ?? ""));
+    if (junk) return { content: [{ type: "text", text: junkReply(junk) }] };
     const [sources, status] = await Promise.all([retrieve(env, args.question), fetchStatus()]);
     if (!isConfidentResponse(sources, MIN_RERANK_SCORE)) {
       const quote = relevantStatusQuote(status, args.question);

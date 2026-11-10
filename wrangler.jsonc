@@ -2,6 +2,9 @@
 	// Support Docs RAG — Worker configuration
 	// Deploy with: npx wrangler deploy
 	"name": "nesi-docs-rag",
+	// nesi-flares account. Pinned so wrangler doesn't fall back to a personal
+	// account when the login has access to several.
+	"account_id": "4156114b0a26d8432abe1177fbdf27d5",
 	"main": "src/worker.js",
 	"compatibility_date": "2026-07-01",
 	// Static chat UI. Requests that don't match a file fall through to the Worker.
