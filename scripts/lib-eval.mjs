@@ -18,6 +18,22 @@ export function loadCases(file) {
     });
 }
 
+/**
+ * fetch() that waits out the Worker's per-IP rate limiter (RATE_LIMITER in
+ * wrangler.jsonc: 20 req/60s across /api/search, /api/chat and /mcp) instead
+ * of failing. Without this a full run reads most cases as request errors,
+ * which score() then silently excludes. Backoff grows to just past the
+ * limiter's 60s window, so a burst always clears eventually.
+ */
+export async function fetchWithRateLimit(url, init, { maxWaits = 8 } = {}) {
+  for (let i = 0; ; i++) {
+    const res = await fetch(url, init);
+    if (res.status !== 429 || i >= maxWaits) return res;
+    const wait = Math.min(5000 * 2 ** i, 65000) + Math.random() * 1000;
+    await new Promise((r) => setTimeout(r, wait));
+  }
+}
+
 /** Run with a small concurrency cap — Workers AI rate-limits bursts. */
 export async function mapLimit(items, limit, fn) {
   const out = new Array(items.length);

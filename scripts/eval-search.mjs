@@ -39,7 +39,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pathToUrl } from "./chunker.mjs";
-import { loadCases, mapLimit, pageOf, resolveUrl } from "./lib-eval.mjs";
+import { fetchWithRateLimit, loadCases, mapLimit, pageOf, resolveUrl } from "./lib-eval.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -87,7 +87,7 @@ async function search(opts, query) {
   const body = JSON.stringify({ query, topK: RETRIEVE_K });
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await fetch(`${opts.url}/api/search`, { method: "POST", headers, body });
+    const res = await fetchWithRateLimit(`${opts.url}/api/search`, { method: "POST", headers, body });
     if (res.ok) return (await res.json()).results ?? [];
     if (res.status < 500 || attempt === 1) {
       throw new Error(`/api/search ${res.status}: ${(await res.text()).slice(0, 200)}`);
