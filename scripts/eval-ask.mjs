@@ -35,7 +35,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pathToUrl } from "./chunker.mjs";
-import { loadCases, mapLimit, pageOf, resolveUrl } from "./lib-eval.mjs";
+import { fetchWithRateLimit, loadCases, mapLimit, pageOf, resolveUrl } from "./lib-eval.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CONCURRENCY = 2; // each case is a full retrieve+rerank+LLM call
@@ -89,7 +89,7 @@ async function askNesiDocs(opts, question) {
     params: { name: "ask_nesi_docs", arguments: { question } },
   });
 
-  const res = await fetch(`${opts.url}/mcp`, { method: "POST", headers, body });
+  const res = await fetchWithRateLimit(`${opts.url}/mcp`, { method: "POST", headers, body });
   if (!res.ok) throw new Error(`/mcp ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const msg = await res.json();
   if (msg.error) throw new Error(`tools/call error: ${msg.error.message}`);

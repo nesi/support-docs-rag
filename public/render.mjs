@@ -6,7 +6,10 @@ export function renderMarkdown(md, sources) {
   let h = md.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const blocks = [];
   h = h.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => { blocks.push(code); return `\x00${blocks.length - 1}\x00`; });
-  h = h.replace(/`([^`]+)`/g, "<code>$1</code>")
+  // Unwrap inline code that is nothing but a markdown link (`[x](url)`) —
+  // models sometimes backtick links, which would otherwise render them raw.
+  h = h.replace(/`(\[[^\]`]+\]\((?:https?:\/\/|mailto:)[^\s)`]+\))`/g, "$1")
+       .replace(/`([^`]+)`/g, "<code>$1</code>")
        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
        .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
        .replace(/\[(\d+)\]/g, (_, n) => {

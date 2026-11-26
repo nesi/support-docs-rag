@@ -29,8 +29,12 @@
 import { liveLookup } from "./liveData.mjs";
 import { isConfidentResponse } from "./confidence.mjs";
 import { isValidDocPath } from "./docPath.mjs";
+import { classifyJunk, junkReply, containsSecret, SECRET_REPLY, isRepeatQuestion, REPEAT_REPLY } from "./junk.mjs";
+import { classifyStatusQuestion, statusReply } from "./statusShortcut.mjs";
 import { realignSbatchBlocks, fillMissingModuleVersions, createSbatchStreamFilter } from "./slurmFormat.mjs";
 import { cleanAnswer, createCitationStreamFilter } from "./citations.mjs";
+import { createBreakStreamFilter } from "./breaks.mjs";
+import { noAnswerReply } from "./fallback.mjs";
 
 const EMBED_MODEL = "@cf/baai/bge-m3";
 const RERANK_MODEL = "@cf/baai/bge-reranker-base";
@@ -54,6 +58,18 @@ const MIN_RERANK_SCORE = 0.4; // below this a chunk isn't shown as a source at a
 const STATUS_API = "https://status.nesi.org.nz/api/v2/summary.json";
 const STATUS_CACHE_TTL = 60; // seconds — edge cache for the status subrequest
 
+// Appended AFTER the excerpts, not inside SYSTEM_PROMPT: the chat model
+// (nemotron) followed a "keep it short, link the section" rule buried in
+// rule 5 poorly -- it still listed every cause from the excerpts. Placed
+// last, closest to the question, it carries more weight.
+const ANSWER_SHAPE = `
+
+=== ANSWER SHAPE (most important, overrides completeness) ===
+- At most 3 short sentences or 4 short bullets. Pick only the cause/steps that best fit THIS question; don't list every possibility the excerpts mention.
+- Then point to the docs for the rest with one line: "More: [Page title › Section heading](URL)" using the URL (with its #anchor) from the header of the excerpt you used most. Use only URLs from the excerpt headers, as markdown links — never bare <...> links or guessed URLs.
+- A requested Slurm script still goes in full (rule 12); the link replaces extra explanation, not the script.
+- No preamble, no closing filler ("If none of these work...", "If the problem persists..."). Mention support only if the excerpts say this needs support.`;
+
 const SYSTEM_PROMPT = `You are the REANNZ HPC support assistant. You answer questions about REANNZ's HPC and storage services (Research Education Advanced Network New Zealand).
 
 Rules — follow all of them strictly:
@@ -62,14 +78,17 @@ Rules — follow all of them strictly:
 3. If the excerpts do not contain the answer, say so plainly and suggest what to search the docs for or to contact [support@nesi.org.nz](mailto:support@nesi.org.nz). Do not guess.
 4. Preserve exact command syntax, module names, paths and Slurm directives from the excerpts - put them in code blocks.
 5. Be concise: lead with the answer or command, no preamble ("Let's walk through some steps", "I'd be happy to help") and no closing filler ("If none of these steps work...", "If you're still having trouble..."). Give only the steps that apply to this question — don't enumerate every possible cause. Prefer a couple of sentences or short bullets over multi-paragraph explanations. Give one script or one command, not several variants side by side — if the excerpts support multiple genuinely different approaches, pick the most basic/common one, or ask the user which they mean instead of dumping all of them. This applies even when the excerpts present the variants as separate tabs/sections for the same tool (e.g. "Serial" vs "Distributed Memory") — that is one question with multiple modes, not multiple questions each needing its own excerpt answered; pick the simplest (usually Serial/single-node) unless the question itself specifies scale or parallelism.
+   Link rather than reproduce: see ANSWER SHAPE at the end, which takes priority over completeness.
 6. The entity NeSI (New Zealand eScience Infrastructure) has been incorporated into REANNZ (Research Education Advanced Network New Zealand).
    Avoid saying "NeSI" for the organisation — say "REANNZ HPC" instead. This does NOT apply to hardware/service names: keep using the specific name from the excerpts (e.g. "Mahuika", "HPC3", "Freezer", "OnDemand") when talking about clusters, storage, or tools.
    Each cluster and service keeps its own single name — OnDemand is called "OnDemand", full stop, regardless of which cluster the user is on. Only prefix or combine two proper nouns together if an excerpt itself writes them that way as one phrase.
-7. Format every web address or email address as a markdown link (e.g. \`[status.nesi.org.nz](https://status.nesi.org.nz)\`, \`[support@nesi.org.nz](mailto:support@nesi.org.nz)\`) — never output a bare URL or email address. Do not cite a link to internal documentation with itself.
+7. Format every web address or email address as a markdown link (e.g. [status.nesi.org.nz](https://status.nesi.org.nz), [support@nesi.org.nz](mailto:support@nesi.org.nz)) — never output a bare URL or email address, and never wrap a link in backticks or a code block. Do not cite a link to internal documentation with itself.
 8. Information from pages about specific software should be given more weight than general information when talking about that software.
 (for example, if user asks 'How do I run ANSYS on GPUs' the small amount of information on the ANSYS page about GPUs should be weighted higher than general GPU use advice, no matter how extensive or relevent.)
 9. A "LIVE SERVICE STATUS" block may be provided above the documentation excerpts, with its own instructions on when and how prominently to use it — follow those. It reflects real-time incidents/maintenance, not documentation, and always quote its text directly rather than paraphrasing.
-10. If the user names a service, cluster, or tool that the excerpts show has been renamed, replaced, or decommissioned (e.g. Māui, JupyterHub, Nearline), say so explicitly in one short clause before answering with the current equivalent — don't just silently answer about the replacement as if that's what they asked.
+10. Terminology mapping — two related cases:
+    a. If the user names a service, cluster, or tool that the excerpts show has been renamed, replaced, or decommissioned (e.g. Māui, JupyterHub, Nearline), say so explicitly as fact in one short clause (e.g. "Nearline was replaced by Freezer") before answering with the current equivalent — don't just silently answer about the replacement as if that's what they asked.
+    b. If the user uses a generic or third-party term that isn't NeSI/REANNZ terminology at all but has an obvious documented equivalent (e.g. "S3", "Glacier", "cold storage", "object storage" for Freezer), open with "Assuming you mean <current name>..." before answering — this is a vocabulary guess, not a documented fact, so phrase it as one and give the user room to correct it. Only do this when the mapping is unambiguous; if genuinely unsure which service they mean, ask instead of guessing.
 11. For job submission, the preferred and default answer is a Slurm script submitted with \`sbatch\` (see the shape below). Don't recommend OnDemand's Slurm Job Composer unless the user specifically asks about it or about a GUI/OnDemand-based workflow.
 12. When showing a Slurm submission script, use this shape — this overrides rule 4 for #SBATCH line formatting specifically. Use a single space between each flag and its value — column alignment is computed and applied downstream, not by you; do not try to pad or align the values yourself, that's how flags and values get run together or merged onto the wrong line.
     - Exactly one script, in its own fenced code block — per rule 5, don't add a second script or a second fence for an alternate mode/variant, and never combine two scripts (or a script plus an unrelated snippet) inside one fence.
@@ -174,7 +193,12 @@ async function retrieve(env, query, topK = CONTEXT_K, rerankQuery = query, apply
     ...appHits.map((h) => ({ metadata: { title: h.title, heading: h.heading, url: h.url, path: h.path, section: h.section, text: h.text }, score: 1 })),
   ];
 
-  // Second stage: cross-encoder rerank.
+  // Second stage: cross-encoder rerank, adjusted by the page's `search: boost`
+  // frontmatter (see scripts/chunker.mjs). sqrt rather than a straight multiply
+  // or a hard clamp: it pulls extreme values (boost: 10, boost: 0.01) toward 1
+  // while still preserving direction, so one hand-tuned outlier page can't
+  // single-handedly swing a chunk across MIN_RERANK_SCORE.
+  const boostFactor = (m) => Math.sqrt(m.metadata?.boost ?? 1);
   const rerank = async (q) => {
     try {
       const rr = await env.AI.run(RERANK_MODEL, {
@@ -183,11 +207,11 @@ async function retrieve(env, query, topK = CONTEXT_K, rerankQuery = query, apply
       });
       const scores = rr.response ?? rr; // [{id, score}] where id = index into contexts
       return scores
-        .map((s) => ({ ...matches[s.id], rerankScore: s.score }))
+        .map((s) => ({ ...matches[s.id], rerankScore: s.score * boostFactor(matches[s.id]) }))
         .sort((a, b) => b.rerankScore - a.rerankScore);
     } catch (e) {
       console.warn("rerank failed, falling back to vector order", e);
-      return matches.map((m) => ({ ...m, rerankScore: m.score }));
+      return matches.map((m) => ({ ...m, rerankScore: m.score * boostFactor(m) }));
     }
   };
 
@@ -229,11 +253,22 @@ function buildContext(sources) {
 // when everything is operational — there's nothing worth surfacing to the
 // model in that case, and it keeps the "not confident" refusal path honest
 // (no live status = don't imply we checked and it's fine).
-async function fetchStatus() {
+// Raw Statuspage summary (edge-cached), or null on failure. fetchStatus()
+// below reduces it to "only what's wrong"; the status shortcut needs the
+// full component list too, to answer "is X down?" with "no, it's operational".
+async function fetchStatusSummary() {
   try {
     const res = await fetch(STATUS_API, { cf: { cacheTtl: STATUS_CACHE_TTL, cacheEverything: true } });
-    if (!res.ok) return null;
-    const data = await res.json();
+    return res.ok ? await res.json() : null;
+  } catch (e) {
+    console.warn("status fetch failed", e);
+    return null;
+  }
+}
+
+async function fetchStatus() {
+  try {
+    const data = await fetchStatusSummary();
     if (!data?.status || data.status.indicator === "none") return null;
 
     // Each entry keeps its raw `name` alongside the formatted `text` line so
@@ -242,16 +277,29 @@ async function fetchStatus() {
       .filter((i) => i.status !== "resolved" && i.status !== "postmortem")
       .map((i) => {
         const latest = i.incident_updates?.[0];
-        return { name: i.name, text: `- ${i.name} [${i.status}, impact: ${i.impact}]${latest ? `: ${latest.body}` : ""}` };
+        // `components` is this incident's OWN affected components (per the Statuspage
+        // API), not the site-wide list -- relevantStatusQuote() needs that distinction
+        // to avoid crediting an unrelated degraded component to this incident's detail.
+        return {
+          name: i.name,
+          status: i.status,
+          components: (i.components || []).map((c) => c.name),
+          text: `- ${i.name} [${i.status}, impact: ${i.impact}]${latest ? `: ${latest.body}` : ""}`,
+        };
       });
 
     const maintenances = (data.scheduled_maintenances || [])
       .filter((m) => m.status === "in_progress" || m.status === "scheduled")
-      .map((m) => ({ name: m.name, text: `- ${m.name} [${m.status}]: ${m.scheduled_for} → ${m.scheduled_until}` }));
+      .map((m) => ({
+        name: m.name,
+        status: m.status,
+        components: (m.components || []).map((c) => c.name),
+        text: `- ${m.name} [${m.status}]: ${m.scheduled_for} → ${m.scheduled_until}`,
+      }));
 
     const affected = (data.components || [])
       .filter((c) => c.status && c.status !== "operational")
-      .map((c) => ({ name: c.name, text: `- ${c.name}: ${c.status.replace(/_/g, " ")}${c.description ? ` — ${c.description}` : ""}` }));
+      .map((c) => ({ name: c.name, status: c.status, text: `- ${c.name}: ${c.status.replace(/_/g, " ")}${c.description ? ` — ${c.description}` : ""}` }));
 
     return { indicator: data.status.indicator, description: data.status.description, incidents, maintenances, affected };
   } catch (e) {
@@ -262,25 +310,43 @@ async function fetchStatus() {
 
 // A truthy `status` (indicator !== "none") doesn't guarantee an open incident
 // or scheduled maintenance entry -- a component can be manually marked
-// degraded on Statuspage with neither. Returns null in that case rather than
-// a quote string, so callers don't interpolate `undefined` into user text.
+// degraded on Statuspage with neither, so this checks affected components
+// on their own too, not just the primary incident/maintenance. Otherwise a
+// "Jobs running on HPC: degraded_performance" flag with no incident text
+// attached is invisible here even though it's exactly the kind of thing
+// worth a one-line mention for a "why is my job slow to start" question.
+//
+// The primary incident/maintenance is only matched against ITS OWN name and
+// components (from the Statuspage API), not the site-wide affected list --
+// otherwise an unrelated degraded component (e.g. "Jobs running on HPC")
+// gets wrongly credited to whatever the primary incident happens to be
+// (e.g. a Freezer/tape incident that doesn't actually touch that component).
 //
 // Used only on the "docs found nothing" path, where there's no LLM call to
 // judge relevance itself — so this does the matching heuristically (name or
-// significant-word overlap with the question) rather than dumping the full
-// incident/maintenance description regardless of topic. No match -> null,
-// so the caller can fall back to a generic "there's an unrelated outage"
-// mention instead of quoting something that may have nothing to do with
-// what was asked.
+// significant-word overlap with the question, singular/plural-insensitive:
+// a component named "Jobs ..." should still match a question about "job").
+// Returns a short "name (status)" string rather than the full incident
+// body -- this is a passing mention pointing at the status page, not the
+// place to explain the incident in detail. No match -> null, so the caller
+// falls back to a generic "there's an unrelated outage" mention instead.
 function relevantStatusQuote(status, question) {
-  const primary = status?.incidents[0] || status?.maintenances[0];
-  if (!primary) return null;
+  if (!status) return null;
   const q = question.toLowerCase();
-  const names = [primary.name, ...(status.affected || []).map((a) => a.name)];
-  const related = names.some(
-    (name) => q.includes(name.toLowerCase()) || name.toLowerCase().split(/\s+/).some((w) => w.length > 3 && q.includes(w))
-  );
-  return related ? primary.text : null;
+  const nameMatches = (name) => {
+    const lower = name.toLowerCase();
+    if (q.includes(lower)) return true;
+    return lower.split(/\s+/).some((w) => w.length > 3 && (q.includes(w) || q.includes(w.replace(/s$/, ""))));
+  };
+
+  const primary = status.incidents[0] || status.maintenances[0];
+  if (primary) {
+    const names = [primary.name, ...(primary.components || [])];
+    if (names.some(nameMatches)) return `${primary.name} (${primary.status})`;
+  }
+
+  const component = status.affected.find((a) => nameMatches(a.name));
+  return component ? `${component.name}: ${component.status.replace(/_/g, " ")}` : null;
 }
 
 function buildStatusBlock(status) {
@@ -297,11 +363,59 @@ function buildStatusBlock(status) {
 }
 
 /* ---------------------------- /api/chat --------------------------- */
+// Junk gate ("test", "hi", keyboard mash): answered with a canned reply before
+// any embed/search/rerank/LLM call. A known app/term name (liveLookup hit)
+// always overrides it, so a module that happens to be called e.g. "foo" still
+// gets looked up. Only the current question is checked, never history.
+async function junkKind(question) {
+  const kind = classifyJunk(question);
+  if (!kind) return null;
+  const hits = await liveLookup(question).catch(() => []);
+  return hits.length ? null : kind;
+}
+
+// All pre-retrieval shortcuts, in priority order. Returns canned reply text,
+// or null to carry on with normal retrieval.
+//  1. Pasted secrets -- first, and never overridden: the text must not reach Workers AI.
+//  2. "Is Mahuika down?" -- answered from the live status page (statusShortcut.mjs).
+//  3. Junk / human / identity / rude (junk.mjs), overridable by a known app/term name.
+//  4. Exact repeat of the user's previous message (chat only -- MCP has no
+//     history). After status/junk on purpose: a repeated "is mahuika down?"
+//     should re-check live status, and a repeated "hi" just gets the greeting.
+async function shortcutReply(question, history = []) {
+  if (containsSecret(question)) return SECRET_REPLY;
+  const statusQ = classifyStatusQuestion(question);
+  if (statusQ) {
+    const reply = statusReply(await fetchStatusSummary(), statusQ);
+    if (reply) return reply;
+  }
+  const junk = await junkKind(question);
+  if (junk) return junkReply(junk);
+  return isRepeatQuestion(question, history) ? REPEAT_REPLY : null;
+}
+
 async function handleChat(request, env) {
   if (request.method !== "POST") return json({ error: "POST only" }, 405);
   if (!checkAuth(request, env)) return json({ error: "unauthorized" }, 401);
-  const { question, history = [] } = await request.json();
+  const { question, history: rawHistory = [] } = await request.json();
   if (!question?.trim()) return json({ error: "question required" }, 400);
+  // The client replays history every turn, so a secret pasted earlier would
+  // otherwise reach the LLM on every later question. Drop those turns.
+  const history = rawHistory.filter((m) => !containsSecret(m?.content));
+
+  const shortcut = await shortcutReply(question, history);
+  if (shortcut) {
+    const encoder = new TextEncoder();
+    const sse = (obj) => encoder.encode(`data: ${JSON.stringify(obj)}\n\n`);
+    return sseResponse(new ReadableStream({
+      start(controller) {
+        controller.enqueue(sse({ type: "sources", sources: [] }));
+        controller.enqueue(sse({ type: "token", text: shortcut }));
+        controller.enqueue(sse({ type: "done" }));
+        controller.close();
+      },
+    }));
+  }
 
   // Fold short conversation history into the retrieval query so follow-ups
   // like "and how much memory?" still retrieve the right pages.
@@ -316,11 +430,7 @@ async function handleChat(request, env) {
 
   if (!confident) {
     const quote = relevantStatusQuote(status, retrievalQuery);
-    const fallback = quote
-      ? `I couldn't find anything in the NeSI support docs that answers that — but there's a live status update that might explain it: "${quote}". Check [status.nesi.org.nz](https://status.nesi.org.nz) for details, or contact [support@nesi.org.nz](mailto:support@nesi.org.nz) if this doesn't look related.`
-      : status
-        ? `I couldn't find anything in the NeSI support docs that answers that. There's also a live status update for a ${status.indicator} outage or maintenance right now, though it doesn't look related — check [status.nesi.org.nz](https://status.nesi.org.nz) if you think otherwise, or contact [support@nesi.org.nz](mailto:support@nesi.org.nz).`
-        : "I couldn't find anything in the NeSI support docs that answers that. Try rephrasing with the specific service or tool name (e.g. Slurm, JupyterHub, Globus), or contact [support@nesi.org.nz](mailto:support@nesi.org.nz).";
+    const fallback = noAnswerReply({ quote, status }); // random variant, see fallback.mjs
     const body = new ReadableStream({
       start(controller) {
         controller.enqueue(sse({ type: "sources", sources: [] }));
@@ -333,7 +443,7 @@ async function handleChat(request, env) {
   }
 
   const messages = [
-    { role: "system", content: SYSTEM_PROMPT + buildStatusBlock(status) + "\n\nDocumentation excerpts:\n\n" + buildContext(sources) },
+    { role: "system", content: SYSTEM_PROMPT + buildStatusBlock(status) + "\n\nDocumentation excerpts:\n\n" + buildContext(sources) + ANSWER_SHAPE },
     ...history.slice(-6),
     { role: "user", content: question },
   ];
@@ -347,7 +457,13 @@ async function handleChat(request, env) {
   const body = new ReadableStream({
     async start(controller) {
       controller.enqueue(sse({ type: "sources", sources: sources.map(({ text, ...s }) => s) }));
-      const sbatchFilter = createSbatchStreamFilter((text) => controller.enqueue(sse({ type: "token", text })));
+      // Last stage: splits the answer into chat bubbles (answer / code block /
+      // "More:" link) with `break` events -- see breaks.mjs.
+      const breakFilter = createBreakStreamFilter(
+        (text) => controller.enqueue(sse({ type: "token", text })),
+        () => controller.enqueue(sse({ type: "break" })),
+      );
+      const sbatchFilter = createSbatchStreamFilter((text) => breakFilter.push(text));
       // Runs first: rewrites 【n†...】 citations to [n] (see citations.mjs).
       // The citation filter drops leading whitespace, so any emit is visible text.
       let answered = false;
@@ -377,6 +493,7 @@ async function handleChat(request, env) {
       await citationFilter.flush();
       if (!answered) await sbatchFilter.push(EMPTY_ANSWER);
       sbatchFilter.flush();
+      breakFilter.flush();
       controller.enqueue(sse({ type: "done" }));
       controller.close();
     },
@@ -488,6 +605,8 @@ async function callTool(env, name, args) {
     return { content: [{ type: "text", text }] };
   }
   if (name === "ask_nesi_docs") {
+    const shortcut = await shortcutReply(String(args.question ?? ""));
+    if (shortcut) return { content: [{ type: "text", text: shortcut }] };
     const [sources, status] = await Promise.all([retrieve(env, args.question), fetchStatus()]);
     if (!isConfidentResponse(sources, MIN_RERANK_SCORE)) {
       const quote = relevantStatusQuote(status, args.question);
@@ -500,7 +619,7 @@ async function callTool(env, name, args) {
     }
     const res = await env.AI.run(CHAT_MODEL, {
       messages: [
-        { role: "system", content: SYSTEM_PROMPT + buildStatusBlock(status) + "\n\nDocumentation excerpts:\n\n" + buildContext(sources) },
+        { role: "system", content: SYSTEM_PROMPT + buildStatusBlock(status) + "\n\nDocumentation excerpts:\n\n" + buildContext(sources) + ANSWER_SHAPE },
         { role: "user", content: args.question },
       ],
       max_tokens: CHAT_MAX_TOKENS,

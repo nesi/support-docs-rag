@@ -61,6 +61,15 @@ export function parseFrontmatter(raw) {
   if (descMatch) meta.description = descMatch[1].replace(/^['"]|['"]$/g, "").trim();
   const tagsBlock = header.match(/^tags:\n((?:\s+-\s*.+\n?)+)/m);
   if (tagsBlock) meta.tags = [...tagsBlock[1].matchAll(/-\s*(.+)/g)].map((m) => m[1].trim());
+  // MkDocs Material's own search-weighting convention (`search: exclude: true` /
+  // `search: boost: N`), already hand-curated across ~70 pages in support-docs for
+  // its site search -- worth reusing here rather than discarding it silently.
+  const searchBlock = header.match(/^search:\s*\n((?:[ \t]+\S.*\n?)*)/m);
+  if (searchBlock) {
+    if (/^\s*exclude:\s*true\s*$/m.test(searchBlock[1])) meta.searchExclude = true;
+    const boostMatch = searchBlock[1].match(/^\s*boost:\s*([\d.]+)\s*$/m);
+    if (boostMatch) meta.searchBoost = parseFloat(boostMatch[1]);
+  }
   return { meta, body };
 }
 
@@ -542,6 +551,9 @@ export function chunkBody(relPath, meta, cleaned, url) {
         path: relPath,
         heading: b.headings[0] || title,
         text: b.text.slice(0, 9000), // Vectorize metadata limit ~10KiB per vector
+        // `search: boost: N` from frontmatter, applied in worker.js's retrieve() -- omitted
+        // (rather than defaulting to 1) so the common case doesn't carry dead metadata.
+        ...(meta.searchBoost != null ? { boost: meta.searchBoost } : {}),
       },
     };
   });
@@ -572,6 +584,7 @@ export function chunkFile(absPath, docsRoot, siteUrl, jinjaCtx) {
   const raw = readFileSync(absPath, "utf8");
   const relPath = relative(docsRoot, absPath);
   const { meta, body } = parseFrontmatter(raw);
+  if (meta.searchExclude) return []; // `search: exclude: true` -- author opted this page out of search entirely
   // Most pages have no `{{...}}` at all -- skip the H1 scan (guessPageTitle)
   // and the resolver pass entirely rather than paying for both on every file.
   const hasTemplateVars = jinjaCtx && body.includes("{{");

@@ -101,12 +101,14 @@ async function send() {
   el("msg user", chat).innerHTML = `<div class="bubble"></div>`;
   chat.lastChild.firstChild.textContent = question;
 
-  const botMsg = el("msg bot", chat);
-  const bubble = el("bubble", botMsg);
+  let botMsg = el("msg bot", chat);
+  let bubble = el("bubble", botMsg);
   bubble.innerHTML = `<div class="thinking">Searching the docs <span class="dot"></span><span class="dot"></span><span class="dot"></span></div>`;
   chat.scrollIntoView(false);
 
-  let answer = "", sources = [];
+  // `parts`: one entry per bubble -- the server sends a `break` event between
+  // the short answer, a code block and the "More:" link (src/breaks.mjs).
+  let parts = [""], sources = [];
   try {
     const headers = { "Content-Type": "application/json" };
     const key = document.getElementById("apikey").value.trim();
@@ -126,9 +128,11 @@ async function send() {
         if (!line.startsWith("data: ")) continue;
         const ev = JSON.parse(line.slice(6));
         if (ev.type === "sources") sources = ev.sources;
-        if (ev.type === "token") { answer += ev.text; bubble.innerHTML = renderMarkdown(answer, sources); chat.scrollIntoView(false); }
+        if (ev.type === "token") { parts[parts.length - 1] += ev.text; bubble.innerHTML = renderMarkdown(parts.at(-1), sources); chat.scrollIntoView(false); }
+        if (ev.type === "break" && parts.at(-1).trim()) { parts.push(""); botMsg = el("msg bot", chat); bubble = el("bubble", botMsg); }
       }
     }
+    if (!parts.at(-1).trim() && parts.length > 1) { botMsg.remove(); parts.pop(); botMsg = chat.lastElementChild; } // trailing break with nothing after it
     if (sources.length) {
       const det = document.createElement("details");
       det.className = "sources";
@@ -136,7 +140,7 @@ async function send() {
         `<a class="source-item" href="${s.url}" target="_blank">[${i + 1}] ${s.title} — ${s.heading}<span>${s.url}</span></a>`).join("");
       botMsg.appendChild(det);
     }
-    history.push({ role: "user", content: question }, { role: "assistant", content: answer });
+    history.push({ role: "user", content: question }, { role: "assistant", content: parts.map((p) => p.trim()).join("\n\n") });
     if (history.length > 12) history.splice(0, history.length - 12);
   } catch (err) {
     bubble.innerHTML = `<p style="color:#c0392b">Error: ${err.message}</p>`;
